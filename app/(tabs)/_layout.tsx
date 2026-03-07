@@ -1,35 +1,68 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
-
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Tabs } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
+
+        tabBarActiveTintColor: "#FFFFFF",
+        tabBarInactiveTintColor: "#A9ABAE",
+
+        tabBarStyle: {
+          backgroundColor: "#040F17",
+          height: 120,
+          borderTopWidth: 0,
+          paddingTop: 10,
+        },
+
+        tabBarLabelStyle: {
+          fontSize: 11,
+          marginBottom: 5,
+        },
+      }}
+    >
       <Tabs.Screen
-        name="index"
+        name="pomodoro"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: "Pomodoro",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="timer-outline" size={18} color={color} />
+          ),
         }}
       />
+
       <Tabs.Screen
-        name="explore"
+        name="notes"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: "Notas",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="create-outline" size={18} color={color} />
+          ),
         }}
       />
+
+      <Tabs.Screen
+        name="calendar"
+        options={{
+          title: "Calendário",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="calendar-outline" size={18} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="tasks"
+        options={{
+          title: "Lista de tarefas",
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="checkbox-outline" size={18} color={color} />
+          ),
+        }}
+      />
+
     </Tabs>
   );
 }
