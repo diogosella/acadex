@@ -1,5 +1,5 @@
-import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { Tabs } from "expo-router";
 
 export default function TabLayout() {
   return (
@@ -20,6 +20,7 @@ export default function TabLayout() {
         tabBarLabelStyle: {
           fontSize: 11,
           marginBottom: 5,
+          fontFamily: "gotham",
         },
       }}
     >
@@ -56,7 +57,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="tasks"
         options={{
-          title: "Lista de tarefas",
+          title: "Tarefas",
           tabBarIcon: ({ color }) => (
             <Ionicons name="checkbox-outline" size={18} color={color} />
           ),

@@ -1,14 +1,26 @@
 import { Colors } from "@/constants/colors";
-import { Text, View, StyleSheet, Image } from "react-native";
+import { useFonts } from "expo-font";
+import { Image, StyleSheet, Text, View } from "react-native";
 
 export default function TimerCircle() {
+
+        const [fontsLoaded] = useFonts({
+            "gotham": require("../../assets/fonts/GothamBook.otf"),
+            "gotham-regular": require("../../assets/fonts/GothamRegular.otf"),
+            "gotham-bold": require("../../assets/fonts/GothamBold.otf"),
+        })
+    
+        if (!fontsLoaded) {
+        return undefined;
+    }
+
     return(
             <View style={styles.timerCircleButton}>
                 <View style={styles.buttonText}>
                     <Text style={styles.textTitle}>ACADEX</Text>
                     <Text style={styles.textSubitle}>Tap to focus.</Text>
                     </View>
-                    <Image source={require("../assets/images/fatec-logo.png")} style={styles.logo}/>
+                    <Image source={require("../../assets/images/fatec-logo.png")} style={styles.logo}/>
             </View>
     )
 }
@@ -24,18 +36,19 @@ const styles = StyleSheet.create({
     },
     buttonText: {
         alignItems: "center",
-        marginTop: 68,
+        marginTop: 76,
     },
     textTitle: {
         color: Colors.background,
         fontSize: 48,
-        fontWeight: "bold",
-        includeFontPadding: false
+        fontFamily: "gotham-bold",
+        includeFontPadding: false,
     },
     textSubitle: {
         color: Colors.background,
         fontSize: 20,
-        includeFontPadding: false
+        includeFontPadding: false,
+        fontFamily: "gotham",
     },
     logo: {
         width: 72,

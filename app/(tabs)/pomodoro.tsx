@@ -1,5 +1,5 @@
-import FocusStreak from "@/components/FocusStreak";
-import TimerCircle from "@/components/TimerCircle";
+import FocusStreak from "@/components/pomodoro/FocusStreak";
+import TimerCircle from "@/components/pomodoro/TimerCircle";
 import Header from "@/components/ui/Header";
 import { Colors } from "@/constants/colors";
 import { Image, StyleSheet, View } from "react-native";
@@ -11,7 +11,7 @@ export default function HomeScreen() {
       <SafeAreaView style={styles.safe}>
 
         <View>
-          <Header />
+          <Header title="Pomodoro" />
           <Image source={require("../../assets/images/settings.png")} style={styles.settings} />
         </View>
 

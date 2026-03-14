@@ -5,7 +5,7 @@ export default function FocusStreak() {
     return (
         <View style={styles.streakdot}>
             <View style={styles.dot}>
-                <Image source={require("../assets/images/current-dot.png")}
+                <Image source={require("../../assets/images/current-dot.png")}
                 style={styles.dotIcon} />
             </View>
                 <View
