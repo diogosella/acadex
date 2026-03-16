@@ -2,6 +2,9 @@ import { Colors } from "@/constants/colors";
 import { Image, StyleSheet, View } from "react-native";
 
 export default function FocusStreak() {
+
+
+
     return (
         <View style={styles.streakdot}>
             <View style={styles.dot}>
