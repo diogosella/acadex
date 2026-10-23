@@ -1,103 +1,239 @@
-import { Platform } from "react-native";
-
-// ATENÇÃO: este módulo isola toda a integração com `expo-notifications`.
-//
-// O pacote `expo-notifications` ainda não está instalado no projeto
-// (precisa rodar `npx expo install expo-notifications`). Enquanto isso não
-// acontecer, as funções abaixo ficam como "no-op" (não fazem nada, só
-// devolvem `null`), para que o resto do app continue funcionando
-// normalmente sem quebrar o bundler por causa de um import de um pacote
-// que não existe em node_modules.
-//
-// Depois que o pacote estiver instalado, troque o conteúdo deste arquivo
-// pela implementação real comentada no final do arquivo (ou peça para o
-// Claude fazer essa troca).
-
-type ScheduleInput = {
-  title: string;
-  date: string; // "YYYY-MM-DD"
-  time: string; // "HH:mm"
-  notifyBeforeMinutes: number | null;
-};
-
-const NOTIFICATIONS_AVAILABLE = false;
-
-export async function ensureNotificationPermissions(): Promise<void> {
-  if (!NOTIFICATIONS_AVAILABLE || Platform.OS === "web") return;
-  // Sem implementação ainda — ver bloco comentado no final do arquivo.
-}
-
-export async function scheduleEventNotification(
-  input: ScheduleInput
-): Promise<string | null> {
-  if (!NOTIFICATIONS_AVAILABLE || Platform.OS === "web") return null;
-  // Sem implementação ainda — ver bloco comentado no final do arquivo.
-  return null;
-}
-
-export async function cancelEventNotification(
-  notificationId: string | null
-): Promise<void> {
-  if (!NOTIFICATIONS_AVAILABLE || Platform.OS === "web" || !notificationId) return;
-  // Sem implementação ainda — ver bloco comentado no final do arquivo.
-}
-
-/*
-IMPLEMENTAÇÃO REAL (ativar depois de `npx expo install expo-notifications`):
-
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+import { CalendarEvent } from "@/types/event";
 
-export async function ensureNotificationPermissions(): Promise<void> {
-  if (Platform.OS === "web") return;
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("default", {
-      name: "default",
-      importance: Notifications.AndroidImportance.DEFAULT,
-    });
-  }
-  const { status } = await Notifications.getPermissionsAsync();
-  if (status !== "granted") {
-    await Notifications.requestPermissionsAsync();
-  }
-}
+// Toda a integração com `expo-notifications` para os eventos do Calendário
+// fica isolada aqui.
+//
+// Cada notificação é agendada com um identificador determinístico
+// ("event:<id do evento>"). Assim, cancelar ou reagendar depende só do id do
+// evento — não é preciso guardar nenhum id de notificação junto do evento, e
+// a reconciliação (syncEventNotifications) consegue saber exatamente quais
+// notificações agendadas pertencem a quais eventos.
+//
+// No navegador (`expo start --web`) notificações locais não existem: todas as
+// funções viram no-op.
 
-export async function scheduleEventNotification(input: ScheduleInput): Promise<string | null> {
-  if (Platform.OS === "web") return null;
-  if (input.notifyBeforeMinutes === null) return null;
+const IS_SUPPORTED = Platform.OS !== "web";
+const EVENT_ID_PREFIX = "event:";
+const ANDROID_CHANNEL_ID = "events";
 
-  const [year, month, day] = input.date.split("-").map(Number);
-  const [hour, minute] = input.time.split(":").map(Number);
-  const eventDate = new Date(year, month - 1, day, hour, minute);
-  const triggerDate = new Date(eventDate.getTime() - input.notifyBeforeMinutes * 60 * 1000);
+// O iOS mantém no máximo 64 notificações locais agendadas por app; a
+// reconciliação agenda só as mais próximas, com folga.
+const MAX_SCHEDULED_NOTIFICATIONS = 60;
 
-  if (triggerDate.getTime() <= Date.now()) return null;
+type EventNotificationInput = Pick<
+  CalendarEvent,
+  "id" | "title" | "date" | "time" | "notifyBeforeMinutes"
+>;
 
-  const id = await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "Acadex",
-      body: input.title,
-    },
-    trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DATE,
-      date: triggerDate,
-    },
+type EventTimingInput = Pick<CalendarEvent, "date" | "time" | "notifyBeforeMinutes">;
+
+export type NotificationPermissionStatus =
+  | "granted"
+  | "denied"
+  | "undetermined"
+  | "unsupported";
+
+export type ScheduleEventNotificationResult =
+  | { scheduled: true }
+  | {
+      scheduled: false;
+      reason: "disabled" | "past" | "denied" | "unsupported" | "error";
+    };
+
+// Faz a notificação aparecer também quando o app está aberto em primeiro
+// plano (por padrão, ela só apareceria com o app em segundo plano/fechado).
+if (IS_SUPPORTED) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
   });
-  return id;
 }
 
-export async function cancelEventNotification(notificationId: string | null): Promise<void> {
-  if (Platform.OS === "web" || !notificationId) return;
-  await Notifications.cancelScheduledNotificationAsync(notificationId);
+function notificationIdFor(eventId: string): string {
+  return `${EVENT_ID_PREFIX}${eventId}`;
 }
-*/
+
+// Data/hora em que o evento acontece, em horário local.
+export function getEventDate(event: Pick<CalendarEvent, "date" | "time">): Date {
+  const [year, month, day] = event.date.split("-").map(Number);
+  const [hour, minute] = event.time.split(":").map(Number);
+  return new Date(year, month - 1, day, hour, minute);
+}
+
+// Data/hora em que o aviso deve disparar, ou null se o evento não tem aviso.
+export function getEventTriggerDate(event: EventTimingInput): Date | null {
+  if (event.notifyBeforeMinutes === null) return null;
+  return new Date(getEventDate(event).getTime() - event.notifyBeforeMinutes * 60 * 1000);
+}
+
+// true quando o evento tem aviso, mas o horário do aviso já passou.
+export function isEventTriggerInPast(event: EventTimingInput): boolean {
+  const trigger = getEventTriggerDate(event);
+  return trigger !== null && trigger.getTime() <= Date.now();
+}
+
+function plural(value: number, singular: string, pluralForm: string): string {
+  return `${value} ${value === 1 ? singular : pluralForm}`;
+}
+
+function describeLeadTime(minutes: number): string {
+  if (minutes % 1440 === 0) return plural(minutes / 1440, "dia", "dias");
+  if (minutes % 60 === 0) return plural(minutes / 60, "hora", "horas");
+  return plural(minutes, "minuto", "minutos");
+}
+
+function buildBody(event: EventNotificationInput): string {
+  const minutes = event.notifyBeforeMinutes ?? 0;
+  if (minutes === 0) return `Começa agora · ${event.time}`;
+  if (minutes === 1440) return `Amanhã às ${event.time}`;
+  return `Começa em ${describeLeadTime(minutes)} · ${event.time}`;
+}
+
+// No Android 8+ toda notificação precisa de um canal; no Android 13+ o canal
+// precisa existir antes do pedido de permissão para o diálogo aparecer.
+async function ensureAndroidChannel(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
+    name: "Eventos do calendário",
+    importance: Notifications.AndroidImportance.HIGH,
+  });
+}
+
+// Consulta o status da permissão sem pedir nada ao usuário.
+export async function getNotificationPermissionStatus(): Promise<NotificationPermissionStatus> {
+  if (!IS_SUPPORTED) return "unsupported";
+  try {
+    const permission = await Notifications.getPermissionsAsync();
+    if (permission.granted) return "granted";
+    return permission.status === "denied" ? "denied" : "undetermined";
+  } catch {
+    return "undetermined";
+  }
+}
+
+// Pede a permissão se ainda for possível; devolve se ela está concedida.
+export async function ensureNotificationPermissions(): Promise<boolean> {
+  if (!IS_SUPPORTED) return false;
+  try {
+    await ensureAndroidChannel();
+    const current = await Notifications.getPermissionsAsync();
+    if (current.granted) return true;
+    if (!current.canAskAgain) return false;
+    const requested = await Notifications.requestPermissionsAsync();
+    return requested.granted;
+  } catch (error) {
+    console.warn("[notificações] falha ao pedir permissão", error);
+    return false;
+  }
+}
+
+type ScheduleOptions = {
+  // true: pede a permissão se ainda não foi concedida (usado quando o
+  // usuário acabou de criar um evento com aviso). false: só agenda se a
+  // permissão já existir (usado na reconciliação ao abrir o app).
+  requestPermission?: boolean;
+};
+
+export async function scheduleEventNotification(
+  event: EventNotificationInput,
+  options: ScheduleOptions = {}
+): Promise<ScheduleEventNotificationResult> {
+  if (!IS_SUPPORTED) return { scheduled: false, reason: "unsupported" };
+
+  const trigger = getEventTriggerDate(event);
+  if (trigger === null) return { scheduled: false, reason: "disabled" };
+  if (trigger.getTime() <= Date.now()) return { scheduled: false, reason: "past" };
+
+  const allowed = options.requestPermission
+    ? await ensureNotificationPermissions()
+    : (await getNotificationPermissionStatus()) === "granted";
+  if (!allowed) return { scheduled: false, reason: "denied" };
+
+  try {
+    await ensureAndroidChannel();
+    const identifier = notificationIdFor(event.id);
+    // Cancela antes, para reagendar sem duplicar (ex: edição de evento).
+    await Notifications.cancelScheduledNotificationAsync(identifier);
+    await Notifications.scheduleNotificationAsync({
+      identifier,
+      content: {
+        title: event.title,
+        body: buildBody(event),
+        data: { eventId: event.id, date: event.date },
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: trigger,
+        channelId: ANDROID_CHANNEL_ID,
+      },
+    });
+    return { scheduled: true };
+  } catch (error) {
+    console.warn("[notificações] falha ao agendar aviso do evento", error);
+    return { scheduled: false, reason: "error" };
+  }
+}
+
+export async function cancelEventNotification(eventId: string): Promise<void> {
+  if (!IS_SUPPORTED) return;
+  try {
+    await Notifications.cancelScheduledNotificationAsync(notificationIdFor(eventId));
+  } catch (error) {
+    console.warn("[notificações] falha ao cancelar aviso do evento", error);
+  }
+}
+
+// Reconciliação entre os eventos salvos e o que está agendado no aparelho:
+// - cancela avisos de eventos que não existem mais (ou cujo aviso foi tirado);
+// - agenda avisos que faltam (eventos criados antes das notificações
+//   existirem, dados restaurados, reinstalação do app etc.).
+// Nunca pede permissão — se ela ainda não foi concedida, só limpa.
+export async function syncEventNotifications(
+  events: EventNotificationInput[]
+): Promise<void> {
+  if (!IS_SUPPORTED) return;
+  try {
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    const scheduledIds = new Set(
+      scheduled
+        .map((request) => request.identifier)
+        .filter((identifier) => identifier.startsWith(EVENT_ID_PREFIX))
+    );
+
+    const upcoming = events
+      .map((event) => ({ event, trigger: getEventTriggerDate(event) }))
+      .filter(
+        (item): item is { event: EventNotificationInput; trigger: Date } =>
+          item.trigger !== null && item.trigger.getTime() > Date.now()
+      )
+      .sort((a, b) => a.trigger.getTime() - b.trigger.getTime())
+      .slice(0, MAX_SCHEDULED_NOTIFICATIONS);
+
+    const wanted = new Map(
+      upcoming.map(({ event }) => [notificationIdFor(event.id), event])
+    );
+
+    for (const identifier of scheduledIds) {
+      if (!wanted.has(identifier)) {
+        await Notifications.cancelScheduledNotificationAsync(identifier);
+      }
+    }
+
+    const missing = [...wanted].filter(([identifier]) => !scheduledIds.has(identifier));
+    if (missing.length === 0) return;
+    if ((await getNotificationPermissionStatus()) !== "granted") return;
+
+    for (const [, event] of missing) {
+      await scheduleEventNotification(event);
+    }
+  } catch (error) {
+    console.warn("[notificações] falha ao sincronizar avisos dos eventos", error);
+  }
+}

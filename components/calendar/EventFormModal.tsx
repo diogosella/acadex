@@ -7,6 +7,11 @@ import {
   formatWeekdayAndDay,
 } from "@/constants/event-options";
 import { useEvents } from "@/contexts/events-context";
+import {
+  getNotificationPermissionStatus,
+  isEventTriggerInPast,
+  NotificationPermissionStatus,
+} from "@/lib/event-notifications";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useEffect, useState } from "react";
 import {
@@ -36,10 +41,16 @@ export default function EventFormModal({ visible, date, onClose }: EventFormModa
   const [hourMenuOpen, setHourMenuOpen] = useState(false);
   const [minuteMenuOpen, setMinuteMenuOpen] = useState(false);
   const [notifyMenuOpen, setNotifyMenuOpen] = useState(false);
+  const [permissionStatus, setPermissionStatus] =
+    useState<NotificationPermissionStatus>("undetermined");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Reseta o formulário toda vez que o modal é aberto.
+  // Reseta o formulário toda vez que o modal é aberto, e consulta (sem
+  // pedir) o status da permissão de notificação para poder avisar o
+  // usuário caso ela esteja negada.
   useEffect(() => {
     if (visible) {
+      getNotificationPermissionStatus().then(setPermissionStatus);
       setTitle("");
       setHour(HOUR_OPTIONS[8]);
       setMinute(MINUTE_OPTIONS[0]);
@@ -59,7 +70,22 @@ export default function EventFormModal({ visible, date, onClose }: EventFormModa
     NOTIFY_BEFORE_OPTIONS.find((option) => option.minutes === notifyBeforeMinutes) ??
     NOTIFY_BEFORE_OPTIONS[0];
 
-  const canSubmit = title.trim().length > 0;
+  const canSubmit = title.trim().length > 0 && !isSubmitting;
+
+  // Mensagem curta abaixo do seletor "Notificar", só quando o aviso
+  // escolhido não vai disparar.
+  let notifyHint: string | null = null;
+  if (notifyBeforeMinutes !== null) {
+    if (permissionStatus === "unsupported") {
+      notifyHint = "Notificações só funcionam no celular.";
+    } else if (permissionStatus === "denied") {
+      notifyHint = "Notificações desativadas nas configurações do aparelho.";
+    } else if (
+      isEventTriggerInPast({ date, time: `${hour}:${minute}`, notifyBeforeMinutes })
+    ) {
+      notifyHint = "Esse horário de aviso já passou. Escolha outro.";
+    }
+  }
 
   const anyMenuOpen = hourMenuOpen || minuteMenuOpen || notifyMenuOpen;
 
@@ -86,14 +112,18 @@ export default function EventFormModal({ visible, date, onClose }: EventFormModa
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!canSubmit) return;
-    addEvent({
+    setIsSubmitting(true);
+    // Espera o agendamento (que pode abrir o diálogo de permissão do
+    // sistema) antes de fechar o modal.
+    await addEvent({
       title: title.trim(),
       date,
       time: `${hour}:${minute}`,
       notifyBeforeMinutes,
     });
+    setIsSubmitting(false);
     onClose();
   };
 
@@ -199,6 +229,8 @@ export default function EventFormModal({ visible, date, onClose }: EventFormModa
               <Ionicons name="chevron-down" size={14} color={Colors.text} />
             </Pressable>
 
+            {notifyHint && <Text style={styles.notifyHint}>{notifyHint}</Text>}
+
             {notifyMenuOpen && (
               <ScrollView style={styles.optionsList}>
                 {NOTIFY_BEFORE_OPTIONS.map((option) => (
@@ -300,6 +332,12 @@ const styles = StyleSheet.create({
     position: "relative",
     zIndex: 1,
     elevation: 1,
+  },
+  notifyHint: {
+    color: "#FFD60A",
+    fontFamily: Fonts.book,
+    fontSize: 12,
+    marginTop: 8,
   },
   selectField: {
     flexDirection: "row",

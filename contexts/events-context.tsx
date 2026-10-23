@@ -6,13 +6,15 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
 import {
   cancelEventNotification,
-  ensureNotificationPermissions,
   scheduleEventNotification,
+  ScheduleEventNotificationResult,
+  syncEventNotifications,
 } from "@/lib/event-notifications";
 import { CalendarEvent } from "@/types/event";
 
@@ -27,28 +29,50 @@ type NewEventInput = {
 
 type EventsContextValue = {
   events: CalendarEvent[];
-  addEvent: (input: NewEventInput) => Promise<void>;
+  addEvent: (input: NewEventInput) => Promise<ScheduleEventNotificationResult>;
   deleteEvent: (id: string) => void;
   getEventsForDate: (dateKey: string) => CalendarEvent[];
 };
 
 const EventsContext = createContext<EventsContextValue | undefined>(undefined);
 
+// Eventos salvos por versões anteriores tinham um campo `notificationId`
+// (hoje o id da notificação é derivado do id do evento). Aqui só os campos
+// atuais são mantidos, então o campo antigo é descartado no próximo save.
+function normalizeStoredEvent(raw: CalendarEvent): CalendarEvent {
+  return {
+    id: raw.id,
+    title: raw.title,
+    date: raw.date,
+    time: raw.time,
+    notifyBeforeMinutes: raw.notifyBeforeMinutes ?? null,
+    createdAt: raw.createdAt,
+  };
+}
+
 export function EventsProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Carrega os eventos salvos uma única vez ao iniciar o app, e já
-  // aproveita para pedir permissão de notificação (nativo apenas).
+  // Cópia sempre atual da lista, para callbacks assíncronos (ex: depois que
+  // o usuário responde o pedido de permissão) enxergarem o estado mais novo.
+  const eventsRef = useRef<CalendarEvent[]>([]);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
+
+  // Carrega os eventos salvos uma única vez ao iniciar o app e reconcilia
+  // as notificações agendadas no aparelho com eles (sem pedir permissão).
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
       .then((raw) => {
-        if (raw) {
-          setEvents(JSON.parse(raw));
-        }
+        const loaded: CalendarEvent[] = raw
+          ? (JSON.parse(raw) as CalendarEvent[]).map(normalizeStoredEvent)
+          : [];
+        setEvents(loaded);
+        syncEventNotifications(loaded);
       })
       .finally(() => setIsLoaded(true));
-    ensureNotificationPermissions();
   }, []);
 
   // Persiste toda vez que a lista de eventos mudar (depois do load inicial).
@@ -58,33 +82,34 @@ export function EventsProvider({ children }: { children: ReactNode }) {
   }, [events, isLoaded]);
 
   const addEvent = useCallback(async (input: NewEventInput) => {
-    const notificationId = await scheduleEventNotification({
-      title: input.title,
-      date: input.date,
-      time: input.time,
-      notifyBeforeMinutes: input.notifyBeforeMinutes,
-    });
-
+    const now = Date.now();
     const newEvent: CalendarEvent = {
-      id: Date.now().toString(),
+      id: now.toString(),
       title: input.title,
       date: input.date,
       time: input.time,
       notifyBeforeMinutes: input.notifyBeforeMinutes,
-      notificationId,
-      createdAt: Date.now(),
+      createdAt: now,
     };
     setEvents((prev) => [...prev, newEvent]);
+
+    // Pede a permissão aqui (e não ao abrir o app): é quando o usuário
+    // acabou de pedir um aviso, então o diálogo do sistema faz sentido.
+    const result = await scheduleEventNotification(newEvent, { requestPermission: true });
+
+    // Se a permissão acabou de ser concedida, agenda também os avisos de
+    // eventos antigos que ficaram sem notificação.
+    if (result.scheduled) {
+      const others = eventsRef.current.filter((event) => event.id !== newEvent.id);
+      syncEventNotifications([...others, newEvent]);
+    }
+
+    return result;
   }, []);
 
   const deleteEvent = useCallback((id: string) => {
-    setEvents((prev) => {
-      const target = prev.find((event) => event.id === id);
-      if (target?.notificationId) {
-        cancelEventNotification(target.notificationId);
-      }
-      return prev.filter((event) => event.id !== id);
-    });
+    setEvents((prev) => prev.filter((event) => event.id !== id));
+    cancelEventNotification(id);
   }, []);
 
   const getEventsForDate = useCallback(

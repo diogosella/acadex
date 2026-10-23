@@ -18,7 +18,12 @@ export const HOUR_OPTIONS: string[] = Array.from({ length: 24 }, (_, hour) =>
   hour.toString().padStart(2, "0")
 );
 
-export const MINUTE_OPTIONS: string[] = ["00", "15", "30", "45"];
+// Em desenvolvimento, todos os minutos (00–59) ficam disponíveis, para dar
+// pra testar notificações criando um evento para daqui 1–2 minutos com
+// "No horário do evento". No app final, só intervalos de 15 minutos.
+export const MINUTE_OPTIONS: string[] = __DEV__
+  ? Array.from({ length: 60 }, (_, minute) => minute.toString().padStart(2, "0"))
+  : ["00", "15", "30", "45"];
 
 const MONTH_NAMES_PT = [
   "Janeiro",
