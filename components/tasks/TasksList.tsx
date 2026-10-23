@@ -1,62 +1,88 @@
-import { Colors } from "@/constants/colors";
-import { useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
-import CheckBox from "react-native-check-box";
+import { Colors, Fonts } from "@/constants/colors";
+import { getPriorityOption } from "@/constants/task-options";
+import { useSubjects } from "@/contexts/subjects-context";
+import { Task } from "@/types/task";
+import Checkbox from "expo-checkbox";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
-export default function TaskList() {
+type TaskCardProps = {
+  task: Task;
+  onToggle: () => void;
+  onDelete: () => void;
+};
 
-        const [isChecked, setIsChecked] = useState(false);
+export default function TaskCard({ task, onToggle, onDelete }: TaskCardProps) {
+  const priorityOption = getPriorityOption(task.priority);
+  const { getSubject } = useSubjects();
+  const subject = task.subjectId ? getSubject(task.subjectId) : undefined;
 
-    return (
-        <>
-                <View style={styles.taskComponent}>
+  return (
+    <View style={styles.taskComponent}>
+      <View style={styles.taskContent}>
+        <View style={styles.taskMain}>
+          <Checkbox
+            style={styles.checkbox}
+            value={task.done}
+            onValueChange={onToggle}
+            color={task.done ? Colors.primary : undefined}
+          />
+          <Text style={styles.taskTitle} numberOfLines={2}>
+            {task.title}
+          </Text>
+        </View>
 
-                    <View style={styles.taskContent}>
+        <View style={styles.taskSettings}>
+          <Text style={[styles.taskType, { color: subject?.color }]}>
+            {subject ? `• ${subject.name}` : ""}
+          </Text>
+          <Text
+            style={[
+              styles.taskUrgency,
+              { color: priorityOption.color, borderColor: priorityOption.color },
+            ]}
+          >
+            {priorityOption.label}
+          </Text>
+        </View>
+      </View>
 
-                        <View style={styles.taskMain}>
-                            <CheckBox style={styles.checkbox}
-                            checkBoxColor={"white"}
-                            isChecked={isChecked}
-                            onClick={() => setIsChecked(!isChecked)} />
-                            <Text style={styles.taskTitle}>Estudar para prova de Engenharia de Software</Text>
-                        </View>
-
-
-                        <View style={styles.taskSettings}>
-                            <Text style={styles.taskType}>• Engenharia de Software</Text>
-                            <Text style={styles.taskUrgency}>Urgente</Text>
-                        </View>
-
-                    </View>
-
-                </View>
-        </>
-    ) 
+      {task.done && (
+        <Pressable style={styles.deleteButton} onPress={onDelete}>
+          <Image
+            source={require("../../assets/images/icons/trash-icon.png")}
+            style={styles.deleteIcon}
+          />
+        </Pressable>
+      )}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
     taskComponent: {
         width: 341,
-        height: 104,
+        minHeight: 104,
         backgroundColor: Colors.tasksBg,
         borderWidth: 1,
         borderColor: Colors.primary,
         borderRadius: 10,
         justifyContent: "center",
-        marginBottom: 16
+        marginBottom: 16,
+        paddingVertical: 12,
     },
     taskContent: {
         flexDirection: "column"
     },
     taskTitle: {
-        width: 284,
-        color: "white",
+        width: 260,
+        color: Colors.text,
         fontSize: 12,
-        fontFamily: "gotham-bold",
+        fontFamily: Fonts.bold,
         marginLeft: 10
     },
     taskMain: {
-        flexDirection: "row"
+        flexDirection: "row",
+        alignItems: "center",
     },
     checkbox: {
         marginLeft: 10
@@ -68,16 +94,27 @@ const styles = StyleSheet.create({
         marginTop: 16
     },
     taskType: {
-        color:"#458FFF",
         fontSize: 8
     },
     taskUrgency: {
-        color: Colors.primary,
         borderWidth: 0.5,
-        borderColor: "red",
         borderRadius: 50,
         paddingHorizontal: 8,
         paddingVertical: 1,
         fontSize: 8
-    }
+    },
+    deleteButton: {
+        position: "absolute",
+        top: 8,
+        right: 8,
+        width: 24,
+        height: 24,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    deleteIcon: {
+        width: 16,
+        height: 16,
+        resizeMode: "contain",
+    },
 })

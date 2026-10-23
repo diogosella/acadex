@@ -1,44 +1,40 @@
-import { useFonts } from "expo-font";
-import { StyleSheet, Text, View } from "react-native";
+import { Colors, Fonts } from "@/constants/colors";
+import { Note } from "@/types/note";
+import { Pressable, StyleSheet, Text } from "react-native";
 
-export default function NoteItem() {
+type NoteItemProps = {
+  note: Note;
+  onPress: () => void;
+};
 
-const [fontsLoaded] = useFonts({
-    "gotham": require("../../assets/fonts/GothamBook.otf"),
-    "gotham-regular": require("../../assets/fonts/GothamRegular.otf"),
-    "gotham-bold": require("../../assets/fonts/GothamBold.otf"),
-})
+export default function NoteItem({ note, onPress }: NoteItemProps) {
+  const title = note.title.trim() || "Sem título";
+  const preview = note.content.slice(0, 60);
 
-if (!fontsLoaded) {
-    return undefined;
-}
-
-    return(
-        <>
-            <View style={styles.noteComponent}>
-                <Text style={styles.NoteTitle}>Sem título</Text>
-                <Text style={styles.NotePreview}>Este é um exemplo de um salvamento de texto no FATEC ACADE...</Text>
-            </View>
-        </>
-    )
+  return (
+    <Pressable style={styles.noteComponent} onPress={onPress}>
+      <Text style={styles.NoteTitle} numberOfLines={1}>{title}</Text>
+      <Text style={styles.NotePreview} numberOfLines={2}>{preview}</Text>
+    </Pressable>
+  );
 }
 
 const styles = StyleSheet.create({
     noteComponent: {
-       backgroundColor: "#AC191A",
+       backgroundColor: Colors.primary,
        width: "100%",
        borderRadius: 10,
        padding: 14,
        marginBottom: 14
     },
     NoteTitle: {
-        color: "white",
-        fontFamily: "gotham-bold",
+        color: Colors.text,
+        fontFamily: Fonts.bold,
         fontSize: 22,
     },
     NotePreview: {
-        color: "white",
-        fontFamily: "gotham",
+        color: Colors.text,
+        fontFamily: Fonts.book,
         fontSize: 10,
         lineHeight: 14,
         marginTop: 4

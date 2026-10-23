@@ -1,3 +1,4 @@
+import { Colors } from "@/constants/colors";
 import { StyleSheet, Text, View } from "react-native";
 
 type HeaderProps = {
@@ -9,7 +10,7 @@ export default function Header({title}: HeaderProps) {
         <View style={styles.header}>
             <Text style={styles.headerText}>{title}</Text>
         </View>
-    ) 
+    )
 }
 
 const styles = StyleSheet.create({
@@ -22,6 +23,6 @@ const styles = StyleSheet.create({
     headerText: {
         fontSize: 24,
         fontWeight: "bold",
-        color: "#ffffff"
+        color: Colors.text
     }
 })
