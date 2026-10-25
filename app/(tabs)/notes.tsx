@@ -1,4 +1,5 @@
 import NoteItem from "@/components/notes/NoteItem";
+import EmptyState from "@/components/ui/EmptyState";
 import Header from "@/components/ui/Header";
 import { Colors } from "@/constants/colors";
 import { useNotes } from "@/contexts/notes-context";
@@ -24,11 +25,19 @@ export default function Notes() {
 
             <FlatList
               style={styles.notesList}
+              contentContainerStyle={styles.notesContent}
               data={notes}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <NoteItem note={item} onPress={() => router.push(`/note/${item.id}`)} />
               )}
+              ListEmptyComponent={
+                <EmptyState
+                  icon="document-text-outline"
+                  title="Nenhuma nota ainda"
+                  description="Guarde resumos, ideias e lembretes das aulas em um só lugar."
+                />
+              }
             />
 
             <Pressable style={styles.createButton} onPress={handleCreateNote}>
@@ -53,6 +62,12 @@ const styles = StyleSheet.create({
   notesList: {
     flex: 1,
     paddingHorizontal: 16,
+  },
+  // flexGrow: 1 deixa o placeholder de lista vazia centralizado na tela;
+  // o espaço embaixo evita que o último item fique atrás do botão flutuante.
+  notesContent: {
+    flexGrow: 1,
+    paddingBottom: 96,
   },
   createButton: {
     width: 50,

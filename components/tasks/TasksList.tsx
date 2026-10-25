@@ -2,6 +2,7 @@ import { Colors, Fonts } from "@/constants/colors";
 import { getPriorityOption } from "@/constants/task-options";
 import { useSubjects } from "@/contexts/subjects-context";
 import { Task } from "@/types/task";
+import { hapticSelection } from "@/lib/haptics";
 import Checkbox from "expo-checkbox";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -9,23 +10,42 @@ type TaskCardProps = {
   task: Task;
   onToggle: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 };
 
-export default function TaskCard({ task, onToggle, onDelete }: TaskCardProps) {
+// Card da tarefa. Tocar no card abre a edição; a caixinha marca/desmarca
+// (área de toque própria, maior que a caixinha) e a lixeira, que aparece
+// nas concluídas, remove.
+export default function TaskCard({ task, onToggle, onDelete, onEdit }: TaskCardProps) {
   const priorityOption = getPriorityOption(task.priority);
   const { getSubject } = useSubjects();
   const subject = task.subjectId ? getSubject(task.subjectId) : undefined;
 
   return (
-    <View style={styles.taskComponent}>
+    <Pressable
+      onPress={() => {
+        hapticSelection();
+        onEdit();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={`Editar tarefa ${task.title}`}
+      style={({ pressed }) => [styles.taskComponent, pressed && styles.taskPressed]}
+    >
       <View style={styles.taskContent}>
         <View style={styles.taskMain}>
-          <Checkbox
-            style={styles.checkbox}
-            value={task.done}
-            onValueChange={onToggle}
-            color={task.done ? Colors.primary : undefined}
-          />
+          <Pressable
+            onPress={onToggle}
+            hitSlop={10}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: task.done }}
+            accessibilityLabel={task.done ? "Desmarcar tarefa" : "Concluir tarefa"}
+            style={styles.checkboxTouch}
+          >
+            {/* A caixinha só desenha; o toque é do Pressable em volta. */}
+            <View pointerEvents="none">
+              <Checkbox value={task.done} color={task.done ? Colors.primary : undefined} />
+            </View>
+          </Pressable>
           <Text style={styles.taskTitle} numberOfLines={2}>
             {task.title}
           </Text>
@@ -54,7 +74,7 @@ export default function TaskCard({ task, onToggle, onDelete }: TaskCardProps) {
           />
         </Pressable>
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -84,8 +104,11 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
     },
-    checkbox: {
-        marginLeft: 10
+    taskPressed: {
+        opacity: 0.85,
+    },
+    checkboxTouch: {
+        marginLeft: 10,
     },
     taskSettings: {
         flexDirection: "row",

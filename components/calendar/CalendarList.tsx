@@ -1,8 +1,8 @@
-import { Colors, Fonts } from "@/constants/colors";
-import { getDaysInMonth, toDateKey } from "@/constants/event-options";
+import { getDaysInMonth, getWeekdayShort, toDateKey } from "@/constants/event-options";
 import { CalendarEvent } from "@/types/event";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
-import EventItem from "./EventItem";
+import { useMemo } from "react";
+import { ScrollView, StyleSheet } from "react-native";
+import DayRow from "./DayRow";
 
 type CalendarListProps = {
   year: number;
@@ -10,6 +10,7 @@ type CalendarListProps = {
   events: CalendarEvent[];
   isCurrentMonth: boolean;
   onAddEvent: (dateKey: string) => void;
+  onEditEvent: (event: CalendarEvent) => void;
 };
 
 export default function CalendarList({
@@ -18,6 +19,7 @@ export default function CalendarList({
   events,
   isCurrentMonth,
   onAddEvent,
+  onEditEvent,
 }: CalendarListProps) {
   const daysInMonth = getDaysInMonth(year, month);
   const today = new Date().getDate();
@@ -28,67 +30,54 @@ export default function CalendarList({
     (day) => !isCurrentMonth || day >= today
   );
 
+  // Agrupa os eventos por dia uma vez só (em vez de filtrar a lista inteira
+  // para cada dia) e ordena por horário dentro de cada dia.
+  const eventsByDate = useMemo(() => {
+    const map = new Map<string, CalendarEvent[]>();
+    for (const event of events) {
+      const list = map.get(event.date);
+      if (list) list.push(event);
+      else map.set(event.date, [event]);
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.time.localeCompare(b.time));
+    }
+    return map;
+  }, [events]);
+
   return (
-    <ScrollView style={styles.calendarComponent}>
+    <ScrollView
+      style={styles.list}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
       {days.map((day) => {
         const dateKey = toDateKey(year, month, day);
-        const dayEvents = events.filter((event) => event.date === dateKey);
-
         return (
-          <View key={day} style={styles.dayContainer}>
-            <Text style={styles.calendarDay}>{day}</Text>
-
-            {dayEvents.length > 0 && (
-              <View style={styles.eventsList}>
-                {dayEvents.map((event) => (
-                  <EventItem key={event.id} event={event} />
-                ))}
-              </View>
-            )}
-
-            <Text style={styles.addButton} onPress={() => onAddEvent(dateKey)}>
-              +
-            </Text>
-
-            <View style={styles.hrLine} />
-          </View>
+          <DayRow
+            key={dateKey}
+            day={day}
+            weekday={getWeekdayShort(year, month, day)}
+            dateKey={dateKey}
+            events={eventsByDate.get(dateKey) ?? NO_EVENTS}
+            isToday={isCurrentMonth && day === today}
+            onAddEvent={onAddEvent}
+            onEditEvent={onEditEvent}
+          />
         );
       })}
     </ScrollView>
   );
 }
 
+// Referência estável para dias sem eventos, para o memo do DayRow funcionar.
+const NO_EVENTS: CalendarEvent[] = [];
+
 const styles = StyleSheet.create({
-  calendarComponent: {
+  list: {
     flex: 1,
-    overflowY: "auto",
   },
-  dayContainer: {
-    flexDirection: "column",
-    marginTop: 20,
-  },
-  calendarDay: {
-    color: Colors.text,
-    marginLeft: 25,
-    fontFamily: Fonts.bold,
-  },
-  eventsList: {
-    marginLeft: 25,
-    marginTop: 4,
-    marginRight: 35,
-  },
-  hrLine: {
-    width: "85%",
-    alignSelf: "center",
-    borderTopWidth: 0.2,
-    borderTopColor: Colors.border,
-  },
-  addButton: {
-    color: Colors.text,
-    alignSelf: "flex-end",
-    fontSize: 18,
-    marginRight: 35,
-    marginTop: 8,
-    marginBottom: 12,
+  content: {
+    paddingBottom: 32,
   },
 });

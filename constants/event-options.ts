@@ -60,6 +60,13 @@ export function formatMonthLabel(year: number, month: number): string {
   return `${MONTH_NAMES_PT[month]} ${year}`;
 }
 
+const WEEKDAY_SHORT_PT = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
+
+// Dia da semana abreviado (ex: "SEG"), usado na lista do Calendário.
+export function getWeekdayShort(year: number, month: number, day: number): string {
+  return WEEKDAY_SHORT_PT[new Date(year, month, day).getDay()];
+}
+
 export function formatWeekdayAndDay(year: number, month: number, day: number): string {
   const date = new Date(year, month, day);
   return `${WEEKDAY_NAMES_PT[date.getDay()]}, ${day} de ${MONTH_NAMES_PT[month].toLowerCase()}`;

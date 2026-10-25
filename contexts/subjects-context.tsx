@@ -21,6 +21,7 @@ type NewSubjectInput = {
 type SubjectsContextValue = {
   subjects: Subject[];
   addSubject: (input: NewSubjectInput) => string;
+  updateSubject: (id: string, input: NewSubjectInput) => void;
   deleteSubject: (id: string) => void;
   getSubject: (id: string) => Subject | undefined;
 };
@@ -60,6 +61,16 @@ export function SubjectsProvider({ children }: { children: ReactNode }) {
     return id;
   }, []);
 
+  const updateSubject = useCallback((id: string, input: NewSubjectInput) => {
+    setSubjects((prev) =>
+      prev.map((subject) =>
+        subject.id === id ? { ...subject, name: input.name, color: input.color } : subject
+      )
+    );
+  }, []);
+
+  // As tarefas que usavam o assunto continuam existindo, só ficam sem
+  // assunto (getSubject passa a devolver undefined para o id antigo).
   const deleteSubject = useCallback((id: string) => {
     setSubjects((prev) => prev.filter((subject) => subject.id !== id));
   }, []);
@@ -70,8 +81,8 @@ export function SubjectsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ subjects, addSubject, deleteSubject, getSubject }),
-    [subjects, addSubject, deleteSubject, getSubject]
+    () => ({ subjects, addSubject, updateSubject, deleteSubject, getSubject }),
+    [subjects, addSubject, updateSubject, deleteSubject, getSubject]
   );
 
   return <SubjectsContext.Provider value={value}>{children}</SubjectsContext.Provider>;

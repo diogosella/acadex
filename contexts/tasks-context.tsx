@@ -10,11 +10,28 @@ import {
 } from "react";
 
 import { PRIORITY_RANK } from "@/constants/task-options";
-import { Task, TaskPriority } from "@/types/task";
+import { Task, TaskCompletion, TaskPriority } from "@/types/task";
 
 const STORAGE_KEY = "acadex:tasks";
+const COMPLETIONS_KEY = "acadex:task-completions";
 
-type NewTaskInput = {
+// Mesmo prazo do histórico do Pomodoro.
+const KEEP_COMPLETIONS_DAYS = 366;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function isCompletion(value: unknown): value is TaskCompletion {
+  const c = value as TaskCompletion;
+  return (
+    typeof c === "object" &&
+    c !== null &&
+    typeof c.id === "string" &&
+    typeof c.taskId === "string" &&
+    typeof c.title === "string" &&
+    typeof c.completedAt === "number"
+  );
+}
+
+export type NewTaskInput = {
   title: string;
   priority: TaskPriority;
   subjectId: string | null;
@@ -22,7 +39,10 @@ type NewTaskInput = {
 
 type TasksContextValue = {
   tasks: Task[];
+  // Tarefas concluídas, mais recentes primeiro (para o histórico).
+  completions: TaskCompletion[];
   addTask: (input: NewTaskInput) => void;
+  updateTask: (id: string, input: NewTaskInput) => void;
   toggleTaskDone: (id: string) => void;
   deleteTask: (id: string) => void;
 };
@@ -32,6 +52,8 @@ const TasksContext = createContext<TasksContextValue | undefined>(undefined);
 export function TasksProvider({ children }: { children: ReactNode }) {
   const [rawTasks, setRawTasks] = useState<Task[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [completions, setCompletions] = useState<TaskCompletion[]>([]);
+  const [completionsLoaded, setCompletionsLoaded] = useState(false);
 
   // Carrega as tarefas salvas uma única vez ao iniciar o app.
   useEffect(() => {
@@ -50,6 +72,24 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(rawTasks));
   }, [rawTasks, isLoaded]);
 
+  useEffect(() => {
+    AsyncStorage.getItem(COMPLETIONS_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const parsed: unknown = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return;
+        const cutoff = Date.now() - KEEP_COMPLETIONS_DAYS * DAY_MS;
+        setCompletions(parsed.filter(isCompletion).filter((c) => c.completedAt >= cutoff));
+      })
+      .catch((error) => console.warn("[tarefas] falha ao ler as conclusões", error))
+      .finally(() => setCompletionsLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    if (!completionsLoaded) return;
+    AsyncStorage.setItem(COMPLETIONS_KEY, JSON.stringify(completions));
+  }, [completions, completionsLoaded]);
+
   const addTask = useCallback((input: NewTaskInput) => {
     const newTask: Task = {
       id: Date.now().toString(),
@@ -62,11 +102,64 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     setRawTasks((prev) => [...prev, newTask]);
   }, []);
 
-  const toggleTaskDone = useCallback((id: string) => {
+  // Edição: título, prioridade e assunto. Se a tarefa já está no histórico
+  // (concluída), o registro acompanha a mudança.
+  const updateTask = useCallback((id: string, input: NewTaskInput) => {
     setRawTasks((prev) =>
-      prev.map((task) => (task.id === id ? { ...task, done: !task.done } : task))
+      prev.map((task) =>
+        task.id === id
+          ? { ...task, title: input.title, priority: input.priority, subjectId: input.subjectId }
+          : task
+      )
+    );
+    setCompletions((prev) =>
+      prev.map((completion) =>
+        completion.taskId === id
+          ? { ...completion, title: input.title, subjectId: input.subjectId }
+          : completion
+      )
     );
   }, []);
+
+  // Marcar: guarda a data de conclusão e registra no histórico.
+  // Desmarcar: tira a data e o registro (foi engano ou a tarefa voltou).
+  // Os updaters são idempotentes (podem rodar duas vezes em modo estrito).
+  const toggleTaskDone = useCallback(
+    (id: string) => {
+      const task = rawTasks.find((item) => item.id === id);
+      if (!task) return;
+
+      if (task.done) {
+        setRawTasks((prev) =>
+          prev.map((item) =>
+            item.id === id ? { ...item, done: false, completedAt: undefined } : item
+          )
+        );
+        setCompletions((prev) => prev.filter((completion) => completion.taskId !== id));
+        return;
+      }
+
+      const completedAt = Date.now();
+      setRawTasks((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, done: true, completedAt } : item))
+      );
+      setCompletions((prev) =>
+        prev.some((completion) => completion.taskId === id)
+          ? prev
+          : [
+              {
+                id: `${id}-${completedAt}`,
+                taskId: id,
+                title: task.title,
+                subjectId: task.subjectId,
+                completedAt,
+              },
+              ...prev,
+            ]
+      );
+    },
+    [rawTasks]
+  );
 
   const deleteTask = useCallback((id: string) => {
     setRawTasks((prev) => prev.filter((task) => task.id !== id));
@@ -83,8 +176,8 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   }, [rawTasks]);
 
   const value = useMemo(
-    () => ({ tasks, addTask, toggleTaskDone, deleteTask }),
-    [tasks, addTask, toggleTaskDone, deleteTask]
+    () => ({ tasks, completions, addTask, updateTask, toggleTaskDone, deleteTask }),
+    [tasks, completions, addTask, updateTask, toggleTaskDone, deleteTask]
   );
 
   return <TasksContext.Provider value={value}>{children}</TasksContext.Provider>;

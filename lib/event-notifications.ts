@@ -1,4 +1,4 @@
-import * as Notifications from "expo-notifications";
+import * as Notifications from "@/lib/notifications-api";
 import { Platform } from "react-native";
 
 import { CalendarEvent } from "@/types/event";
@@ -98,21 +98,39 @@ function buildBody(event: EventNotificationInput): string {
 
 // No Android 8+ toda notificação precisa de um canal; no Android 13+ o canal
 // precisa existir antes do pedido de permissão para o diálogo aparecer.
+//
+// Criar o canal é "melhor esforço": se falhar, não pode impedir o pedido de
+// permissão nem o agendamento. Sem o canal "events", o expo-notifications
+// usa automaticamente o canal padrão dele (fallback), e o aviso chega mesmo
+// assim, só sem o nome/importância personalizados.
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== "android") return;
-  await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
-    name: "Eventos do calendário",
-    importance: Notifications.AndroidImportance.HIGH,
-  });
+  try {
+    await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
+      name: "Eventos do calendário",
+      importance: Notifications.AndroidImportance.HIGH,
+    });
+  } catch (error) {
+    console.warn("[notificações] falha ao criar o canal Android de eventos", error);
+  }
 }
 
 // Consulta o status da permissão sem pedir nada ao usuário.
+//
+// "denied" aqui significa bloqueada de vez: o sistema não deixa mais o app
+// perguntar (canAskAgain false), e só dá para ativar nas configurações. No
+// Android, o status pode vir como "denied" mesmo quando ainda dá para
+// perguntar (por exemplo, depois de uma única recusa, ou no Expo Go). Nesses
+// casos o diálogo do sistema ainda aparece ao criar o evento, então tratamos
+// como "undetermined".
 export async function getNotificationPermissionStatus(): Promise<NotificationPermissionStatus> {
   if (!IS_SUPPORTED) return "unsupported";
   try {
     const permission = await Notifications.getPermissionsAsync();
     if (permission.granted) return "granted";
-    return permission.status === "denied" ? "denied" : "undetermined";
+    return permission.status === "denied" && !permission.canAskAgain
+      ? "denied"
+      : "undetermined";
   } catch {
     return "undetermined";
   }

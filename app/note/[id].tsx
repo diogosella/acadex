@@ -1,5 +1,7 @@
+import FloatingMenu from "@/components/ui/FloatingMenu";
 import { Colors, Fonts } from "@/constants/colors";
 import { useNotes } from "@/contexts/notes-context";
+import { useAnchoredMenu } from "@/hooks/use-anchored-menu";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
@@ -11,8 +13,21 @@ export default function NoteEditor() {
   const { getNote, updateNote, deleteNote } = useNotes();
   const note = getNote(id);
 
-  const [menuOpen, setMenuOpen] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
+
+  // Menu "..." flutuante, desenhado no container da tela e alinhado pela
+  // direita do botão (ver hooks/use-anchored-menu.ts: pendurado embaixo do
+  // botão, fora dos limites do pai, ele não recebia o toque no Android).
+  const {
+    containerRef,
+    anchorRef,
+    openMenu,
+    position: menuPosition,
+    toggle: toggleMenu,
+    close: closeMenu,
+    onContainerLayout,
+  } = useAnchoredMenu<"options">({ maxHeight: 120, minWidth: 170, align: "right" });
+  const menuOpen = openMenu === "options";
 
   if (!note) {
     return null;
@@ -27,42 +42,24 @@ export default function NoteEditor() {
   };
 
   return (
-    <View style={styles.container}>
+    <View ref={containerRef} style={styles.container} onLayout={onContainerLayout}>
       <SafeAreaView style={styles.safe}>
-        {menuOpen && (
-          <Pressable
-            style={styles.menuBackdrop}
-            onPress={() => setMenuOpen(false)}
-          />
-        )}
+        {menuOpen && <Pressable style={styles.menuBackdrop} onPress={closeMenu} />}
 
         <View style={styles.headerRow}>
           <Pressable style={styles.iconButton} onPress={() => router.back()}>
             <Ionicons name="chevron-back" size={26} color={Colors.text} />
           </Pressable>
 
-          <View>
-            <Pressable
-              style={styles.iconButton}
-              onPress={() => setMenuOpen((prev) => !prev)}
-            >
-              <Ionicons name="ellipsis-horizontal" size={22} color={Colors.text} />
-            </Pressable>
-
-            {menuOpen && (
-              <View style={styles.menu}>
-                <Pressable
-                  style={styles.menuItem}
-                  onPress={() => {
-                    setMenuOpen(false);
-                    setConfirmVisible(true);
-                  }}
-                >
-                  <Text style={styles.menuItemText}>Deletar nota</Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
+          <Pressable
+            ref={anchorRef("options")}
+            style={styles.iconButton}
+            onPress={() => toggleMenu("options")}
+            accessibilityRole="button"
+            accessibilityLabel="Mais opções"
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={Colors.text} />
+          </Pressable>
         </View>
 
         <TextInput
@@ -84,6 +81,19 @@ export default function NoteEditor() {
           textAlignVertical="top"
         />
       </SafeAreaView>
+
+      {/* Último filho do container: fica por cima do conteúdo da tela. */}
+      <FloatingMenu position={menuOpen ? menuPosition : null} maxHeight={120}>
+        <Pressable
+          style={styles.menuItem}
+          onPress={() => {
+            closeMenu();
+            setConfirmVisible(true);
+          }}
+        >
+          <Text style={styles.menuItemText}>Deletar nota</Text>
+        </Pressable>
+      </FloatingMenu>
 
       <Modal
         transparent
@@ -126,7 +136,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   menuBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 1,
   },
   headerRow: {
@@ -141,16 +151,6 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: "center",
     alignItems: "center",
-  },
-  menu: {
-    position: "absolute",
-    top: 40,
-    right: 0,
-    minWidth: 170,
-    backgroundColor: `${Colors.primary}CC`,
-    borderRadius: 10,
-    paddingVertical: 4,
-    zIndex: 10,
   },
   menuItem: {
     paddingVertical: 12,

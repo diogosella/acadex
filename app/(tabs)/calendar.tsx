@@ -6,22 +6,27 @@ import { formatMonthLabel } from "@/constants/event-options";
 import { useEvents } from "@/contexts/events-context";
 import { CalendarEvent } from "@/types/event";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useMemo, useState } from "react";
-import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { hapticSelection } from "@/lib/haptics";
+import { useEffect, useMemo, useState } from "react";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
-  runOnJS,
+  cancelAnimation,
+  Easing,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { scheduleOnRN } from "react-native-worklets";
 
-// Quantos pixels de arrasto horizontal já contam como "troquei de mês" ao
-// soltar o dedo (senão, volta pra posição original).
+// Arrasto mínimo (fração da largura) para trocar de mês ao soltar devagar.
 const SWIPE_COMMIT_RATIO = 0.25;
-const SWIPE_ANIMATION_MS = 220;
-const SNAP_BACK_ANIMATION_MS = 200;
+// Velocidade (px/s) a partir da qual um "peteleco" curto já troca de mês.
+const SWIPE_VELOCITY_THRESHOLD = 600;
+// Resistência ao arrastar para antes do mês atual, que não existe.
+const RUBBER_BAND = 0.25;
+const PAGE_ANIMATION = { duration: 260, easing: Easing.out(Easing.cubic) };
 
 function monthFromOffset(offset: number) {
   const now = new Date();
@@ -37,9 +42,10 @@ type MonthPaneProps = {
   events: CalendarEvent[];
   width: number;
   onAddEvent: (dateKey: string) => void;
+  onEditEvent: (event: CalendarEvent) => void;
 };
 
-function MonthPane({ offset, events, width, onAddEvent }: MonthPaneProps) {
+function MonthPane({ offset, events, width, onAddEvent, onEditEvent }: MonthPaneProps) {
   const { year, month } = monthFromOffset(offset);
   const isCurrentMonth = offset === 0;
 
@@ -49,14 +55,27 @@ function MonthPane({ offset, events, width, onAddEvent }: MonthPaneProps) {
   }, [events, year, month]);
 
   return (
-    <View style={{ width, height: "100%" }}>
-      <Text style={styles.monthName}>{formatMonthLabel(year, month)}</Text>
+    // Cada mês fica numa posição fixa da "faixa": offset × largura. Como a
+    // posição não depende de qual mês está selecionado, trocar o mês no
+    // estado do React não move nada na tela (ver comentário no Calendar).
+    <View style={[styles.pane, { width, left: offset * width }]}>
+      <View style={styles.monthHeader}>
+        <Text style={styles.monthName}>{formatMonthLabel(year, month)}</Text>
+        {/* Placeholder discreto: o mês vazio continua mostrando os dias
+            (é neles que se cria o evento), só com uma dica de como usar. */}
+        {monthEvents.length === 0 && (
+          <Text style={styles.emptyMonthHint}>
+            Nenhum evento · toque em um dia para adicionar
+          </Text>
+        )}
+      </View>
       <CalendarList
         year={year}
         month={month}
         events={monthEvents}
         isCurrentMonth={isCurrentMonth}
         onAddEvent={onAddEvent}
+        onEditEvent={onEditEvent}
       />
     </View>
   );
@@ -67,108 +86,159 @@ export default function Calendar() {
   const { width } = useWindowDimensions();
   const [monthOffset, setMonthOffset] = useState(0);
   const [addEventDate, setAddEventDate] = useState<string | null>(null);
+  // Na primeira renderização monta só o mês visível; os vizinhos (usados
+  // no swipe) entram no quadro seguinte. Deixa a montagem da tela mais
+  // leve sem mudar nada do que aparece.
+  const [neighborsReady, setNeighborsReady] = useState(false);
 
-  const translateX = useSharedValue(0);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setNeighborsReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
+  // Posição da faixa de meses, em "páginas" (0 = mês atual, 1 = próximo...).
+  // Fica toda no thread de UI: o arrasto e a animação mexem só nela.
+  //
+  // Por que o nome do mês piscava antes: a faixa tinha sempre 3 meses
+  // (anterior, atual, próximo) em posições relativas ao mês selecionado. No
+  // fim da animação, a posição voltava para 0 na hora (thread de UI), mas a
+  // troca de mês no React só chegava alguns quadros depois (thread de JS).
+  // Nesse intervalo a tela mostrava de novo o mês antigo — o "flash".
+  //
+  // Agora cada mês tem posição absoluta na faixa, e a animação termina
+  // exatamente sobre o mês novo. O estado do React só decide quais meses
+  // vizinhos montar; o mês visível nunca é remontado nem reposicionado.
+  const position = useSharedValue(0);
+  const dragStart = useSharedValue(0);
+
+  const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const handleAddEvent = (dateKey: string) => setAddEventDate(dateKey);
+  const handleEditEvent = (event: CalendarEvent) => setEditingEvent(event);
+  const closeEventForm = () => {
+    setAddEventDate(null);
+    setEditingEvent(null);
+  };
 
-  // Arrasto horizontal real: o mês atual acompanha o dedo, e o mês
-  // vizinho (anterior ou seguinte, já renderizado do lado) vai aparecendo
-  // conforme o arrasto avança — exatamente como um app de calendário
-  // nativo. Ao soltar: se passou do limiar, completa a troca de mês; caso
-  // contrário, volta suavemente pra posição original.
+  const commitMonth = (offset: number) => {
+    if (offset === monthOffset) return;
+    hapticSelection();
+    setMonthOffset(offset);
+  };
+
+  // Usado pelas setas: anima até o mês e atualiza o estado.
+  const goToMonth = (offset: number) => {
+    const target = Math.max(0, offset);
+    // .set() em vez de .value: forma recomendada pelo Reanimated fora de
+    // worklets quando o React Compiler está ativo (experiments.reactCompiler).
+    position.set(withTiming(target, PAGE_ANIMATION));
+    commitMonth(target);
+  };
+
   const panGesture = Gesture.Pan()
     .activeOffsetX([-20, 20])
     .failOffsetY([-10, 10])
+    .onStart(() => {
+      // Se uma animação ainda estiver rodando, o dedo "pega" a faixa onde
+      // ela está, sem pulo.
+      cancelAnimation(position);
+      dragStart.value = position.value;
+    })
     .onUpdate((e) => {
-      let tx = e.translationX;
-      // Resistência (rubber band) ao tentar arrastar pra revelar um mês
-      // anterior ao atual, que não existe.
-      if (monthOffset === 0 && tx > 0) {
-        tx = tx * 0.25;
-      }
-      translateX.value = tx;
+      let next = dragStart.value - e.translationX / width;
+      if (next < 0) next *= RUBBER_BAND;
+      position.value = next;
     })
     .onEnd((e) => {
-      const commitDistance = width * SWIPE_COMMIT_RATIO;
-      const goNext = e.translationX < -commitDistance;
-      const goPrev = e.translationX > commitDistance && monthOffset > 0;
+      const base = Math.round(dragStart.value);
+      const moved = dragStart.value - position.value; // > 0: arrastou p/ direita
+      let target = base;
 
-      if (goNext) {
-        const nextOffset = monthOffset + 1;
-        translateX.value = withTiming(-width, { duration: SWIPE_ANIMATION_MS }, () => {
-          translateX.value = 0;
-          runOnJS(setMonthOffset)(nextOffset);
-        });
-      } else if (goPrev) {
-        const nextOffset = monthOffset - 1;
-        translateX.value = withTiming(width, { duration: SWIPE_ANIMATION_MS }, () => {
-          translateX.value = 0;
-          runOnJS(setMonthOffset)(nextOffset);
-        });
-      } else {
-        translateX.value = withTiming(0, { duration: SNAP_BACK_ANIMATION_MS });
+      if (e.velocityX < -SWIPE_VELOCITY_THRESHOLD || moved < -SWIPE_COMMIT_RATIO) {
+        target = base + 1;
+      } else if (e.velocityX > SWIPE_VELOCITY_THRESHOLD || moved > SWIPE_COMMIT_RATIO) {
+        target = base - 1;
       }
+      target = Math.max(0, target);
+
+      position.value = withTiming(target, PAGE_ANIMATION);
+      // Troca o estado já no início da animação: o vizinho seguinte é
+      // montado enquanto a faixa desliza, e o mês visível não muda de lugar.
+      scheduleOnRN(commitMonth, target);
     });
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: -width + translateX.value }],
+  const trackStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: -position.value * width }],
   }));
+
+  // Monta só o mês selecionado e os vizinhos (não existe mês antes do atual).
+  const visibleOffsets = (
+    neighborsReady ? [monthOffset - 1, monthOffset, monthOffset + 1] : [monthOffset]
+  ).filter((offset) => offset >= 0);
 
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
         <Header title="Calendário" />
 
-        {/* Indica ao usuário que a troca de mês é feita deslizando a tela
-            (não há botões de seta funcionais — navegação é só por swipe). */}
-        <View style={styles.swipeHint}>
-          <Ionicons
-            name="chevron-back"
-            size={14}
-            color="#FFFFFF60"
-            style={monthOffset === 0 ? styles.swipeHintIconDisabled : undefined}
-          />
+        {/* Setas tocáveis + dica de swipe: dá para trocar de mês dos dois
+            jeitos, e as setas deixam claro que existe navegação. */}
+        <View style={styles.monthNav}>
+          <Pressable
+            onPress={() => goToMonth(monthOffset - 1)}
+            disabled={monthOffset === 0}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Mês anterior"
+            style={({ pressed }) => [
+              styles.navButton,
+              pressed && styles.navButtonPressed,
+              monthOffset === 0 && styles.navButtonDisabled,
+            ]}
+          >
+            <Ionicons name="chevron-back" size={16} color={Colors.text} />
+          </Pressable>
+
           <Text style={styles.swipeHintText}>Deslize para mudar o mês</Text>
-          <Ionicons name="chevron-forward" size={14} color="#FFFFFF60" />
+
+          <Pressable
+            onPress={() => goToMonth(monthOffset + 1)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Próximo mês"
+            style={({ pressed }) => [styles.navButton, pressed && styles.navButtonPressed]}
+          >
+            <Ionicons name="chevron-forward" size={16} color={Colors.text} />
+          </Pressable>
         </View>
 
         <GestureDetector gesture={panGesture}>
           <View style={styles.swipeArea}>
-            <Animated.View style={[styles.track, { width: width * 3 }, animatedStyle]}>
-              {monthOffset > 0 ? (
+            {/* A faixa é larga o bastante para conter todos os meses
+                montados: no Android, um filho fora dos limites do pai não
+                recebe toques. */}
+            <Animated.View
+              style={[styles.track, { width: (monthOffset + 2) * width }, trackStyle]}
+            >
+              {visibleOffsets.map((offset) => (
                 <MonthPane
-                  offset={monthOffset - 1}
+                  key={offset}
+                  offset={offset}
                   events={events}
                   width={width}
                   onAddEvent={handleAddEvent}
+                  onEditEvent={handleEditEvent}
                 />
-              ) : (
-                <View style={{ width }} />
-              )}
-
-              <MonthPane
-                offset={monthOffset}
-                events={events}
-                width={width}
-                onAddEvent={handleAddEvent}
-              />
-
-              <MonthPane
-                offset={monthOffset + 1}
-                events={events}
-                width={width}
-                onAddEvent={handleAddEvent}
-              />
+              ))}
             </Animated.View>
           </View>
         </GestureDetector>
       </SafeAreaView>
 
       <EventFormModal
-        visible={addEventDate !== null}
+        visible={addEventDate !== null || editingEvent !== null}
         date={addEventDate}
-        onClose={() => setAddEventDate(null)}
+        event={editingEvent}
+        onClose={closeEventForm}
       />
     </View>
   );
@@ -182,20 +252,31 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
   },
-  swipeHint: {
+  monthNav: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    gap: 12,
     paddingVertical: 4,
+  },
+  navButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF0F",
+  },
+  navButtonPressed: {
+    backgroundColor: `${Colors.primary}80`,
+  },
+  navButtonDisabled: {
+    opacity: 0.3,
   },
   swipeHintText: {
     color: "#FFFFFF60",
     fontFamily: Fonts.book,
     fontSize: 11,
-  },
-  swipeHintIconDisabled: {
-    opacity: 0.35,
   },
   swipeArea: {
     flex: 1,
@@ -203,14 +284,27 @@ const styles = StyleSheet.create({
   },
   track: {
     flex: 1,
-    flexDirection: "row",
   },
-  monthName: {
+  pane: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+  },
+  monthHeader: {
     marginLeft: 25,
+    marginRight: 20,
     marginTop: 35,
     marginBottom: 35,
+  },
+  monthName: {
     fontSize: 32,
     fontFamily: Fonts.bold,
     color: Colors.text,
+  },
+  emptyMonthHint: {
+    marginTop: 8,
+    color: "#FFFFFF80",
+    fontFamily: Fonts.book,
+    fontSize: 12,
   },
 });

@@ -30,6 +30,7 @@ type NewEventInput = {
 type EventsContextValue = {
   events: CalendarEvent[];
   addEvent: (input: NewEventInput) => Promise<ScheduleEventNotificationResult>;
+  updateEvent: (id: string, input: NewEventInput) => Promise<ScheduleEventNotificationResult>;
   deleteEvent: (id: string) => void;
   getEventsForDate: (dateKey: string) => CalendarEvent[];
 };
@@ -107,6 +108,27 @@ export function EventsProvider({ children }: { children: ReactNode }) {
     return result;
   }, []);
 
+  // Edição: troca os dados e reagenda o aviso (o id da notificação é
+  // derivado do id do evento, então o aviso antigo é substituído). Se o
+  // aviso foi tirado ou já passou, o antigo é só cancelado.
+  const updateEvent = useCallback(async (id: string, input: NewEventInput) => {
+    const current = eventsRef.current.find((event) => event.id === id);
+    if (!current) return { scheduled: false, reason: "disabled" } as const;
+
+    const updated: CalendarEvent = {
+      ...current,
+      title: input.title,
+      date: input.date,
+      time: input.time,
+      notifyBeforeMinutes: input.notifyBeforeMinutes,
+    };
+    setEvents((prev) => prev.map((event) => (event.id === id ? updated : event)));
+
+    const result = await scheduleEventNotification(updated, { requestPermission: true });
+    if (!result.scheduled) await cancelEventNotification(id);
+    return result;
+  }, []);
+
   const deleteEvent = useCallback((id: string) => {
     setEvents((prev) => prev.filter((event) => event.id !== id));
     cancelEventNotification(id);
@@ -118,8 +140,8 @@ export function EventsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ events, addEvent, deleteEvent, getEventsForDate }),
-    [events, addEvent, deleteEvent, getEventsForDate]
+    () => ({ events, addEvent, updateEvent, deleteEvent, getEventsForDate }),
+    [events, addEvent, updateEvent, deleteEvent, getEventsForDate]
   );
 
   return <EventsContext.Provider value={value}>{children}</EventsContext.Provider>;
