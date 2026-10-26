@@ -3,7 +3,8 @@ import { router } from "expo-router";
 import { useEffect } from "react";
 import { Platform } from "react-native";
 
-// Ao tocar numa notificação de evento, o app deve abrir na aba Calendário.
+// Ao tocar numa notificação, o app abre na aba certa: aviso de evento →
+// Calendário; lembrete de tarefa → Tarefas; aviso do Pomodoro → Pomodoro.
 //
 // São dois casos, tratados em lugares diferentes:
 //
@@ -20,7 +21,7 @@ import { Platform } from "react-native";
 
 type NotificationResponse = Notifications.NotificationResponse;
 
-const CALENDAR_ROUTE = "/calendar";
+type NotificationRoute = "/calendar" | "/tasks" | "/pomodoro";
 
 // Identifica uma resposta específica (mesma notificação, mesmo disparo).
 function responseKey(response: NotificationResponse): string {
@@ -36,28 +37,35 @@ let handledLaunchResponseKey: string | null = null;
 // do app (o React pode chamar o inicializador do useState duas vezes em
 // desenvolvimento; a segunda chamada precisa dar o mesmo resultado).
 let launchTargetResolved = false;
-let launchTarget: typeof CALENDAR_ROUTE | null = null;
+let launchTarget: NotificationRoute | null = null;
 
-function isEventTap(response: NotificationResponse | null): response is NotificationResponse {
-  if (!response) return false;
-  if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return false;
-  return typeof response.notification.request.content.data?.eventId === "string";
+// Rota de destino para um toque numa notificação do app (null = não é um
+// toque numa notificação nossa, ou foi num botão de ação).
+function routeForTap(response: NotificationResponse | null): NotificationRoute | null {
+  if (!response) return null;
+  if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return null;
+  const data = response.notification.request.content.data;
+  if (typeof data?.eventId === "string") return "/calendar";
+  if (typeof data?.taskId === "string") return "/tasks";
+  if (data?.pomodoro === true) return "/pomodoro";
+  return null;
 }
 
 // Chamada uma vez pela rota inicial: se o app foi aberto pelo toque numa
-// notificação de evento, devolve a rota do Calendário (e "consome" a
-// resposta, para não redirecionar de novo em remontagens). Senão, null.
-export function getLaunchNotificationTarget(): typeof CALENDAR_ROUTE | null {
+// notificação, devolve a rota da aba certa (e "consome" a resposta, para não
+// redirecionar de novo em remontagens). Senão, null.
+export function getLaunchNotificationTarget(): NotificationRoute | null {
   if (launchTargetResolved) return launchTarget;
   launchTargetResolved = true;
   if (Platform.OS === "web") return null;
 
   try {
     const response = Notifications.getLastNotificationResponse();
-    if (isEventTap(response)) {
+    const route = routeForTap(response);
+    if (response && route) {
       handledLaunchResponseKey = responseKey(response);
       Notifications.clearLastNotificationResponse();
-      launchTarget = CALENDAR_ROUTE;
+      launchTarget = route;
     }
   } catch (error) {
     console.warn("[notificações] falha ao ler a notificação que abriu o app", error);
@@ -70,11 +78,12 @@ export function useNotificationNavigation() {
     if (Platform.OS === "web") return;
 
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      if (!isEventTap(response)) return;
+      const route = routeForTap(response);
+      if (!route) return;
       if (responseKey(response) === handledLaunchResponseKey) return;
 
       Notifications.clearLastNotificationResponse();
-      router.navigate(CALENDAR_ROUTE);
+      router.navigate(route);
     });
     return () => subscription.remove();
   }, []);

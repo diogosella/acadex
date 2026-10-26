@@ -17,11 +17,16 @@ import {
   STREAK_DOT_COUNT,
 } from "@/constants/pomodoro-options";
 import { usePomodoroHistory } from "@/contexts/pomodoro-history-context";
+import {
+  cancelPomodoroNotifications,
+  schedulePomodoroNotifications,
+} from "@/lib/pomodoro-notifications";
 import { usePomodoroSettings } from "@/contexts/pomodoro-settings-context";
 import {
   PomodoroDailyProgress,
   PomodoroPhase,
   PomodoroRoundCelebration,
+  PomodoroSessionType,
 } from "@/types/pomodoro";
 
 const STORAGE_KEY = "acadex:pomodoro-progress";
@@ -42,60 +47,112 @@ type PomodoroContextValue = {
 
 const PomodoroContext = createContext<PomodoroContextValue | undefined>(undefined);
 
+// Fase em andamento salva no aparelho: se o sistema fechar o app no meio de
+// um foco (comum no Android), ele volta de onde estava ao reabrir.
+const RUNNING_KEY = "acadex:pomodoro-running";
+
+type ActivePhase = Exclude<PomodoroPhase, "idle">;
+
+type SavedRunningState = {
+  phase: ActivePhase;
+  isRunning: boolean;
+  phaseEndAt: number | null; // rodando: quando a fase termina
+  remainingMs: number; // pausado: quanto faltava
+  durationMs: number;
+  startedAt: number;
+  cycleNumber: number;
+  cycleCount: number;
+};
+
+function isSavedRunningState(value: unknown): value is SavedRunningState {
+  const v = value as SavedRunningState;
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v.phase === "focus" || v.phase === "shortBreak" || v.phase === "longBreak") &&
+    typeof v.isRunning === "boolean" &&
+    typeof v.remainingMs === "number" &&
+    typeof v.durationMs === "number" &&
+    typeof v.startedAt === "number" &&
+    typeof v.cycleNumber === "number" &&
+    typeof v.cycleCount === "number"
+  );
+}
+
+// Proteção contra laço infinito ao avançar fases que terminaram com o app
+// fechado (no máximo: foco → pausa → ocioso).
+const MAX_PHASE_ADVANCES = 4;
+
 export function PomodoroProvider({ children }: { children: ReactNode }) {
   // Durações e ciclos vêm da tela de configurações. Uma fase já em
   // andamento mantém o horário de término com que começou; as mudanças
   // valem a partir da próxima fase.
-  const { settings } = usePomodoroSettings();
-  // Cada foco completado ou cancelado vira uma "Sessão Pomodoro" no histórico.
+  const { settings, isLoaded: settingsLoaded } = usePomodoroSettings();
+  // Cada foco ou pausa, completado ou cancelado, vira uma "Sessão Pomodoro"
+  // no histórico (com o tipo e o número no ciclo).
   const { addSession } = usePomodoroHistory();
   const [phase, setPhase] = useState<PomodoroPhase>("idle");
   const [isRunning, setIsRunning] = useState(false);
   const [remainingMs, setRemainingMs] = useState(0);
   const [completedToday, setCompletedToday] = useState(0);
-  const [roundFocusMs, setRoundFocusMs] = useState(0);
   const [celebration, setCelebration] = useState<PomodoroRoundCelebration | null>(null);
-  // Duração planejada do foco em andamento (para somar o tempo da rodada).
-  const focusDurationRef = useRef(0);
-  // Quando o foco em andamento começou (para o histórico).
-  const focusStartedAtRef = useRef(0);
 
-  // Ciclo de foco atual (0..cyclesBeforeLongBreak-1); só em memória —
-  // não precisa persistir (ver decisão de escopo no plano).
+  // O "motor" do timer trabalha com refs (sempre o valor mais novo, mesmo
+  // dentro do interval e ao avançar várias fases de uma vez); os estados
+  // acima são só o que a tela mostra.
+  const phaseRef = useRef<PomodoroPhase>("idle");
+  const completedTodayRef = useRef(0);
+  // Tempo de foco somado na rodada atual de bolinhas.
+  const roundFocusMsRef = useRef(0);
+  // Duração planejada da fase em andamento (para o histórico e para somar o
+  // tempo de foco da rodada).
+  const phaseDurationRef = useRef(0);
+  // Quando a fase em andamento começou (para o histórico).
+  const phaseStartedAtRef = useRef(0);
+  // Número no ciclo da fase em andamento (numeroNoCiclo): o foco leva a sua
+  // posição no ciclo (1, 2, ...) e a pausa, a do foco que veio antes.
+  const phaseCycleNumberRef = useRef(1);
+  // Focos já feitos no ciclo atual (0..cyclesBeforeLongBreak-1).
   const cycleCountRef = useRef(0);
   // Timestamp (epoch ms) em que a fase atual termina. A contagem real é
-  // sempre derivada dele (nunca de um decremento ingênuo por tick), pra
-  // não desviar quando o timer "atrasa" — aba em segundo plano no
-  // navegador, app em background no celular, etc.
+  // sempre derivada dele (nunca de um decremento por tick), então o tempo
+  // continua correndo com o app em segundo plano ou fechado.
   const phaseEndAtRef = useRef<number | null>(null);
+  // A restauração da fase salva roda uma vez só.
+  const restoredRef = useRef(false);
+  // true logo depois de o usuário iniciar um foco: o próximo agendamento
+  // dos avisos pode pedir a permissão de notificação.
+  const askPermissionRef = useRef(false);
 
-  // Carrega o progresso do dia salvo uma única vez ao iniciar o app; se a
-  // data salva não é mais hoje, já zera e persiste.
-  useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      const today = getTodayKey();
-      if (raw) {
-        const saved = JSON.parse(raw) as PomodoroDailyProgress;
-        if (saved.lastActiveDate === today) {
-          setCompletedToday(saved.completedToday);
-          setRoundFocusMs(saved.roundFocusMs ?? 0);
-          return;
-        }
-      }
-      setCompletedToday(0);
-      setRoundFocusMs(0);
-      const fresh: PomodoroDailyProgress = {
-        completedToday: 0,
-        lastActiveDate: today,
-        roundFocusMs: 0,
-      };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
-    });
+  const applyPhase = useCallback((next: PomodoroPhase) => {
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
+
+  // Salva (ou apaga, se ocioso) a fase em andamento no aparelho.
+  const saveRunning = useCallback((running: boolean, remaining: number) => {
+    const current = phaseRef.current;
+    if (current === "idle") {
+      AsyncStorage.removeItem(RUNNING_KEY);
+      return;
+    }
+    const state: SavedRunningState = {
+      phase: current,
+      isRunning: running,
+      phaseEndAt: running ? phaseEndAtRef.current : null,
+      remainingMs: remaining,
+      durationMs: phaseDurationRef.current,
+      startedAt: phaseStartedAtRef.current,
+      cycleNumber: phaseCycleNumberRef.current,
+      cycleCount: cycleCountRef.current,
+    };
+    AsyncStorage.setItem(RUNNING_KEY, JSON.stringify(state));
   }, []);
 
   const persistProgress = useCallback((count: number, roundMs: number) => {
+    completedTodayRef.current = count;
+    roundFocusMsRef.current = roundMs;
     setCompletedToday(count);
-    setRoundFocusMs(roundMs);
     const progress: PomodoroDailyProgress = {
       completedToday: count,
       lastActiveDate: getTodayKey(),
@@ -104,143 +161,267 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
   }, []);
 
-  // Recalcula o estado a partir do relógio real (phaseEndAtRef), avançando
-  // de fase automaticamente quando o tempo já esgotou. Chamada a cada tick
-  // do interval e também quando o app volta ao foreground (AppState).
-  // Não é memoizada com useCallback de propósito: é redefinida a cada
-  // render (sempre vendo `phase`/`completedToday` atuais) e guardada numa
-  // ref logo abaixo, que é o que o interval de fato chama.
-  function recompute() {
-    if (phaseEndAtRef.current === null) return;
-
-    const remaining = phaseEndAtRef.current - Date.now();
-    if (remaining > 0) {
-      setRemainingMs(remaining);
-      return;
-    }
-
-    if (phase === "focus") {
-      // Foco completado: conta a bolinha e soma o tempo na rodada. Ao
-      // completar a rodada (ex: 5 focos), dispara a parabenização com o
-      // tempo total e começa uma rodada nova (bolinhas zeram).
-      const count = completedToday + 1;
-      const sessionMs = focusDurationRef.current || durationForPhase("focus", settings);
-      const roundMs = roundFocusMs + sessionMs;
-      const endedAt = phaseEndAtRef.current;
-      addSession({
-        startedAt: focusStartedAtRef.current || endedAt - sessionMs,
-        endedAt,
-        durationMs: sessionMs,
-        completed: true,
-      });
-      if (count % STREAK_DOT_COUNT === 0) {
-        // Rodada completa: SEM pausa. O timer para e fica no estado de
-        // "concluído" (check grande no círculo + parabéns) até o usuário
-        // tocar em "Continuar" (dismissCelebration), que volta ao início.
-        setCelebration({ sessions: STREAK_DOT_COUNT, focusMs: roundMs });
-        persistProgress(count, 0);
-        cycleCountRef.current = 0;
-        phaseEndAtRef.current = null;
-        setPhase("idle");
-        setRemainingMs(0);
-        setIsRunning(false);
-        return;
-      }
-      persistProgress(count, roundMs);
-
-      const nextCycle = cycleCountRef.current + 1;
-      const isLongBreak = nextCycle >= settings.cyclesBeforeLongBreak;
-      cycleCountRef.current = isLongBreak ? 0 : nextCycle;
-
-      const nextPhase: PomodoroPhase = isLongBreak ? "longBreak" : "shortBreak";
+  // Inicia uma fase (foco ou pausa) em `startAt` — normalmente agora; ao
+  // avançar fases que terminaram com o app fechado, no instante exato em
+  // que a anterior acabou (a pausa começa quando o foco terminou, não
+  // quando o usuário voltou ao app).
+  const startPhase = useCallback(
+    (nextPhase: ActivePhase, cycleNumber: number, startAt: number = Date.now()) => {
       const duration = durationForPhase(nextPhase, settings);
-      phaseEndAtRef.current = Date.now() + duration;
-      setPhase(nextPhase);
-      setRemainingMs(duration);
+      phaseDurationRef.current = duration;
+      phaseStartedAtRef.current = startAt;
+      phaseCycleNumberRef.current = cycleNumber;
+      phaseEndAtRef.current = startAt + duration;
+      applyPhase(nextPhase);
+      setRemainingMs(Math.max(0, startAt + duration - Date.now()));
       setIsRunning(true);
-      return;
-    }
+      saveRunning(true, duration);
+    },
+    [settings, applyPhase, saveRunning]
+  );
 
-    // Pausa (curta ou longa) terminou — volta pro estado ocioso, esperando
-    // o usuário tocar para iniciar o próximo foco.
+  const goIdle = useCallback(() => {
     phaseEndAtRef.current = null;
-    setPhase("idle");
+    applyPhase("idle");
     setRemainingMs(0);
     setIsRunning(false);
-  }
+    saveRunning(false, 0);
+  }, [applyPhase, saveRunning]);
 
-  // Atualizada depois de cada render (e não durante o render, que o React
-  // não permite), para o interval sempre chamar a versão mais nova.
-  const recomputeRef = useRef(recompute);
+  // Registra a fase atual no histórico. `effectiveMs`: tempo realmente
+  // cumprido (a duração planejada se completou; menos, se cancelou).
+  const recordPhase = useCallback(
+    (type: PomodoroSessionType, endedAt: number, effectiveMs: number, completed: boolean) => {
+      addSession({
+        type,
+        cycleNumber: phaseCycleNumberRef.current,
+        startedAt: phaseStartedAtRef.current || endedAt - effectiveMs,
+        endedAt,
+        durationMs: effectiveMs,
+        completed,
+      });
+    },
+    [addSession]
+  );
+
+  // Recalcula o estado a partir do relógio real (phaseEndAtRef). Chamada a
+  // cada segundo, quando o app volta ao primeiro plano e ao restaurar uma
+  // fase salva. Se uma ou mais fases já terminaram (app em segundo plano ou
+  // fechado), avança por todas elas, cada uma começando no fim da anterior.
+  const recompute = useCallback(() => {
+    for (let step = 0; step < MAX_PHASE_ADVANCES; step++) {
+      const end = phaseEndAtRef.current;
+      if (end === null) return;
+
+      const remaining = end - Date.now();
+      if (remaining > 0) {
+        setRemainingMs(remaining);
+        return;
+      }
+
+      const current = phaseRef.current;
+      if (current === "focus") {
+        // Foco completado: conta a bolinha e soma o tempo na rodada. Ao
+        // completar a rodada (ex: 5 focos), dispara a parabenização com o
+        // tempo total e começa uma rodada nova (bolinhas zeram).
+        const count = completedTodayRef.current + 1;
+        const sessionMs = phaseDurationRef.current || durationForPhase("focus", settings);
+        const roundMs = roundFocusMsRef.current + sessionMs;
+        recordPhase("focus", end, sessionMs, true);
+
+        if (count % STREAK_DOT_COUNT === 0) {
+          // Rodada completa: SEM pausa. O timer para e fica no estado de
+          // "concluído" (check grande no círculo + parabéns) até o usuário
+          // tocar em "Continuar" (dismissCelebration), que volta ao início.
+          setCelebration({ sessions: STREAK_DOT_COUNT, focusMs: roundMs });
+          persistProgress(count, 0);
+          cycleCountRef.current = 0;
+          goIdle();
+          return;
+        }
+        persistProgress(count, roundMs);
+
+        const nextCycle = cycleCountRef.current + 1;
+        const isLongBreak = nextCycle >= settings.cyclesBeforeLongBreak;
+        cycleCountRef.current = isLongBreak ? 0 : nextCycle;
+
+        // A pausa começa no instante em que o foco terminou e leva o número
+        // do foco que acabou.
+        startPhase(isLongBreak ? "longBreak" : "shortBreak", phaseCycleNumberRef.current, end);
+        continue;
+      }
+
+      // Pausa (curta ou longa) terminou — registra e volta pro estado
+      // ocioso, esperando o usuário tocar para iniciar o próximo foco.
+      if (current !== "idle") {
+        recordPhase(
+          current,
+          end,
+          phaseDurationRef.current || durationForPhase(current, settings),
+          true
+        );
+      }
+      goIdle();
+      return;
+    }
+  }, [settings, recordPhase, persistProgress, startPhase, goIdle]);
+
+  // Ao abrir o app: carrega o progresso do dia e, depois, a fase que estava
+  // em andamento (se houver), avançando o que tiver terminado enquanto o
+  // app estava fechado. Espera as configurações carregarem, porque as
+  // durações das próximas fases vêm delas.
   useEffect(() => {
-    recomputeRef.current = recompute;
-  });
+    if (!settingsLoaded || restoredRef.current) return;
+    restoredRef.current = true;
+
+    (async () => {
+      const today = getTodayKey();
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const saved = raw ? (JSON.parse(raw) as PomodoroDailyProgress) : null;
+        if (saved && saved.lastActiveDate === today) {
+          completedTodayRef.current = saved.completedToday;
+          roundFocusMsRef.current = saved.roundFocusMs ?? 0;
+          setCompletedToday(saved.completedToday);
+        } else {
+          persistProgress(0, 0);
+        }
+      } catch (error) {
+        console.warn("[pomodoro] falha ao ler o progresso do dia", error);
+      }
+
+      try {
+        const raw = await AsyncStorage.getItem(RUNNING_KEY);
+        const saved: unknown = raw ? JSON.parse(raw) : null;
+        // Se o usuário já iniciou algo enquanto a leitura acontecia, vale o
+        // que ele fez.
+        if (!isSavedRunningState(saved) || phaseRef.current !== "idle") return;
+
+        phaseDurationRef.current = saved.durationMs;
+        phaseStartedAtRef.current = saved.startedAt;
+        phaseCycleNumberRef.current = saved.cycleNumber;
+        cycleCountRef.current = saved.cycleCount;
+        applyPhase(saved.phase);
+        if (saved.isRunning && saved.phaseEndAt !== null) {
+          phaseEndAtRef.current = saved.phaseEndAt;
+          setIsRunning(true);
+          recompute();
+        } else {
+          phaseEndAtRef.current = null;
+          setRemainingMs(saved.remainingMs);
+          setIsRunning(false);
+        }
+      } catch (error) {
+        console.warn("[pomodoro] falha ao restaurar a fase em andamento", error);
+      }
+    })();
+  }, [settingsLoaded, persistProgress, applyPhase, recompute]);
+
+  // Avisos do Pomodoro: reagendados sempre que a fase começa, pausa,
+  // retoma ou termina. Rodando, agenda o fim da fase (e, no foco, o fim da
+  // pausa seguinte); pausado ou parado, cancela. As refs já estão
+  // atualizadas quando este efeito roda (são escritas antes dos setState).
+  useEffect(() => {
+    const end = phaseEndAtRef.current;
+    if (phase === "idle" || !isRunning || end === null) {
+      cancelPomodoroNotifications();
+      return;
+    }
+
+    const requestPermission = askPermissionRef.current;
+    askPermissionRef.current = false;
+
+    if (phase !== "focus") {
+      schedulePomodoroNotifications(
+        {
+          phase,
+          phaseEndAt: end,
+          nextBreak: null,
+          round: null,
+          soundEnabled: settings.soundEnabled,
+        },
+        { requestPermission }
+      );
+      return;
+    }
+
+    const focusMs = phaseDurationRef.current;
+    const completesRound = (completedTodayRef.current + 1) % STREAK_DOT_COUNT === 0;
+    const nextCycle = cycleCountRef.current + 1;
+    const nextBreakPhase =
+      nextCycle >= settings.cyclesBeforeLongBreak ? "longBreak" : "shortBreak";
+    schedulePomodoroNotifications(
+      {
+        phase,
+        phaseEndAt: end,
+        nextBreak: completesRound
+          ? null
+          : { phase: nextBreakPhase, durationMs: durationForPhase(nextBreakPhase, settings) },
+        round: completesRound
+          ? { sessions: STREAK_DOT_COUNT, focusMs: roundFocusMsRef.current + focusMs }
+          : null,
+        soundEnabled: settings.soundEnabled,
+      },
+      { requestPermission }
+    );
+  }, [phase, isRunning, settings]);
 
   useEffect(() => {
     if (!isRunning) return;
-    const interval = setInterval(() => recomputeRef.current(), 1000);
+    const interval = setInterval(recompute, 1000);
     return () => clearInterval(interval);
-  }, [isRunning]);
+  }, [isRunning, recompute]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") recomputeRef.current();
+      if (state === "active") recompute();
     });
     return () => subscription.remove();
-  }, []);
+  }, [recompute]);
 
   const toggle = useCallback(() => {
     if (phase === "idle") {
-      const duration = durationForPhase("focus", settings);
-      focusDurationRef.current = duration;
-      focusStartedAtRef.current = Date.now();
-      phaseEndAtRef.current = Date.now() + duration;
-      setPhase("focus");
-      setRemainingMs(duration);
-      setIsRunning(true);
+      // Posição deste foco no ciclo até a pausa longa (1, 2, ...). É aqui
+      // que o app pede a permissão de notificação, se ainda não tiver.
+      askPermissionRef.current = true;
+      startPhase("focus", cycleCountRef.current + 1);
       return;
     }
 
     if (isRunning) {
       // Pausa: congela o tempo restante atual.
-      if (phaseEndAtRef.current !== null) {
-        setRemainingMs(Math.max(0, phaseEndAtRef.current - Date.now()));
-      }
+      const remaining =
+        phaseEndAtRef.current !== null
+          ? Math.max(0, phaseEndAtRef.current - Date.now())
+          : remainingMs;
+      setRemainingMs(remaining);
       phaseEndAtRef.current = null;
       setIsRunning(false);
+      saveRunning(false, remaining);
       return;
     }
 
     // Retoma de onde parou.
     phaseEndAtRef.current = Date.now() + remainingMs;
     setIsRunning(true);
-  }, [phase, isRunning, remainingMs, settings]);
+    saveRunning(true, remainingMs);
+  }, [phase, isRunning, remainingMs, startPhase, saveRunning]);
 
   // Toque longo: cancela a sessão atual sem contar como completada — não
   // altera completedToday nem o ciclo.
   const cancel = useCallback(() => {
-    // Foco cancelado: entra no histórico como não completado, com o tempo
-    // de foco que chegou a ser feito (cancelamentos quase imediatos, não).
-    if (phase === "focus") {
+    // Foco ou pausa cancelados: entram no histórico como não completados,
+    // com o tempo que chegou a ser feito (cancelamentos quase imediatos, não).
+    if (phase !== "idle") {
       const remaining =
         isRunning && phaseEndAtRef.current !== null
           ? Math.max(0, phaseEndAtRef.current - Date.now())
           : remainingMs;
-      const focusedMs = focusDurationRef.current - remaining;
-      if (focusedMs >= 1000) {
-        addSession({
-          startedAt: focusStartedAtRef.current,
-          endedAt: Date.now(),
-          durationMs: focusedMs,
-          completed: false,
-        });
-      }
+      const doneMs = phaseDurationRef.current - remaining;
+      if (doneMs >= 1000) recordPhase(phase, Date.now(), doneMs, false);
     }
-    phaseEndAtRef.current = null;
-    setPhase("idle");
-    setRemainingMs(0);
-    setIsRunning(false);
-  }, [phase, isRunning, remainingMs, addSession]);
+    goIdle();
+  }, [phase, isRunning, remainingMs, recordPhase, goIdle]);
 
   const dismissCelebration = useCallback(() => setCelebration(null), []);
 

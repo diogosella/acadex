@@ -56,10 +56,19 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     return id;
   }, []);
 
+  // Grava a data de atualização só quando o texto muda de fato (abrir e
+  // fechar uma nota sem mexer não conta como edição).
   const updateNote = useCallback(
     (id: string, changes: Partial<Pick<Note, "title" | "content">>) => {
+      const now = Date.now();
       setNotes((prev) =>
-        prev.map((note) => (note.id === id ? { ...note, ...changes } : note))
+        prev.map((note) => {
+          if (note.id !== id) return note;
+          const changed =
+            (changes.title !== undefined && changes.title !== note.title) ||
+            (changes.content !== undefined && changes.content !== note.content);
+          return changed ? { ...note, ...changes, updatedAt: now } : note;
+        })
       );
     },
     []
@@ -74,9 +83,19 @@ export function NotesProvider({ children }: { children: ReactNode }) {
     [notes]
   );
 
+  // Lista mostrada: editadas mais recentemente primeiro (a ordem salva não
+  // muda).
+  const sortedNotes = useMemo(
+    () =>
+      [...notes].sort(
+        (a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)
+      ),
+    [notes]
+  );
+
   const value = useMemo(
-    () => ({ notes, addNote, updateNote, deleteNote, getNote }),
-    [notes, addNote, updateNote, deleteNote, getNote]
+    () => ({ notes: sortedNotes, addNote, updateNote, deleteNote, getNote }),
+    [sortedNotes, addNote, updateNote, deleteNote, getNote]
   );
 
   return <NotesContext.Provider value={value}>{children}</NotesContext.Provider>;

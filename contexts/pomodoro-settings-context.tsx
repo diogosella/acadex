@@ -19,6 +19,8 @@ const STORAGE_KEY = "acadex:pomodoro-settings";
 
 type PomodoroSettingsContextValue = {
   settings: PomodoroSettings;
+  // true depois de ler as configurações salvas (antes disso vale o padrão).
+  isLoaded: boolean;
   updateSettings: (changes: Partial<PomodoroSettings>) => void;
   resetSettings: () => void;
 };
@@ -38,6 +40,10 @@ function normalize(raw: Partial<Record<keyof PomodoroSettings, unknown>>): Pomod
       "cyclesBeforeLongBreak",
       raw.cyclesBeforeLongBreak
     ),
+    soundEnabled:
+      typeof raw.soundEnabled === "boolean"
+        ? raw.soundEnabled
+        : DEFAULT_POMODORO_SETTINGS.soundEnabled,
   };
 }
 
@@ -71,8 +77,8 @@ export function PomodoroSettingsProvider({ children }: { children: ReactNode }) 
   }, []);
 
   const value = useMemo(
-    () => ({ settings, updateSettings, resetSettings }),
-    [settings, updateSettings, resetSettings]
+    () => ({ settings, isLoaded, updateSettings, resetSettings }),
+    [settings, isLoaded, updateSettings, resetSettings]
   );
 
   return (

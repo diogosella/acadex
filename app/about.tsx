@@ -25,12 +25,12 @@ const FAQ: FaqItem[] = [
   {
     question: "Como inicio, pauso ou cancelo uma sessão?",
     answer:
-      "Toque no círculo vermelho do Pomodoro para começar. Durante a sessão, toque de novo no círculo para pausar ou retomar. Para cancelar sem contar a sessão, segure o círculo. Os marcadores de progresso embaixo mostram as sessões completadas na rodada atual: ao completar 5, você recebe os parabéns e eles recomeçam.",
+      "Toque no círculo vermelho do Pomodoro para começar. Durante a sessão, toque de novo no círculo para pausar ou retomar. Para cancelar sem contar a sessão, segure o círculo. O timer continua contando mesmo com o app em segundo plano ou fechado, e um aviso chega quando o foco ou a pausa terminam. Os marcadores de progresso embaixo mostram as sessões completadas na rodada atual: ao completar 5, você recebe os parabéns e eles recomeçam.",
   },
   {
     question: "Como crio um evento com lembrete?",
     answer:
-      "No Calendário, toque no dia desejado, preencha o título e a hora e escolha em \"Notificar\" quando quer ser avisado. Para trocar de mês, deslize para os lados ou use as setas. Para editar, mudar o dia ou excluir um evento, toque nele.",
+      "No Calendário, toque no dia desejado, preencha o título e a hora e escolha em \"Notificar\" quando quer ser avisado. O mês aparece inteiro: os dias que já passaram ficam apagados (dá para consultar os eventos deles, mas não criar novos). Para trocar de mês, deslize para os lados ou use as setas. Para editar, mudar o dia ou excluir um evento, toque nele.",
   },
   {
     question: "Por que não recebo as notificações?",
@@ -40,7 +40,7 @@ const FAQ: FaqItem[] = [
   {
     question: "Como organizo minhas tarefas?",
     answer:
-      "Na aba Tarefas, toque em + para criar uma tarefa com prioridade e assunto. Os assuntos têm cores e podem ser criados no próprio formulário (+); o lápis ao lado de cada assunto na lista permite renomear, trocar a cor ou excluir. Toque numa tarefa para editá-la ou excluí-la. Ao marcar uma tarefa como concluída, aparece também a lixeira para removê-la.",
+      "Na aba Tarefas, toque em + para criar uma tarefa com prioridade e assunto. Os assuntos têm cores e podem ser criados no próprio formulário (+); o lápis ao lado de cada assunto na lista permite renomear, trocar a cor ou excluir. Também dá para definir uma data de entrega e um lembrete, que chega às 9h do dia escolhido; tarefas atrasadas aparecem em vermelho. Toque numa tarefa para editá-la ou excluí-la. Ao marcar uma tarefa como concluída, aparece também a lixeira para removê-la.",
   },
   {
     question: "Onde vejo meu histórico?",

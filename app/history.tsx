@@ -89,7 +89,13 @@ function sessionsLabel(count: number): string {
 }
 
 export default function HistoryScreen() {
-  const { sessions } = usePomodoroHistory();
+  const { sessions: allSessions } = usePomodoroHistory();
+  // As telas mostram só os focos; as pausas ficam salvas no histórico, mas
+  // não entram no resumo, no mapa nem na lista.
+  const sessions = useMemo(
+    () => allSessions.filter((session) => session.type === "focus"),
+    [allSessions]
+  );
   const { tasks, completions } = useTasks();
   const { getSubject } = useSubjects();
   const { width } = useWindowDimensions();

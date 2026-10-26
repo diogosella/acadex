@@ -15,7 +15,7 @@ import {
   NotificationPermissionStatus,
 } from "@/lib/event-notifications";
 import { hapticSelection } from "@/lib/haptics";
-import { PomodoroSettings } from "@/types/pomodoro";
+import { PomodoroNumericSetting } from "@/types/pomodoro";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
@@ -40,7 +40,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 // ajuda". Tudo é salvo na hora, sem botão de salvar.
 
 type SettingRowConfig = {
-  key: keyof PomodoroSettings;
+  key: PomodoroNumericSetting;
   label: string;
   description: string;
   unit: string;
@@ -92,6 +92,7 @@ export default function SettingsScreen() {
   const initials = getInitials(profile.name);
   const isDefault =
     SETTING_ROWS.every(({ key }) => settings[key] === DEFAULT_POMODORO_SETTINGS[key]) &&
+    settings.soundEnabled === DEFAULT_POMODORO_SETTINGS.soundEnabled &&
     preferences.hapticsEnabled === DEFAULT_PREFERENCES.hapticsEnabled &&
     preferences.defaultNotifyBeforeMinutes === DEFAULT_PREFERENCES.defaultNotifyBeforeMinutes;
 
@@ -160,9 +161,26 @@ export default function SettingsScreen() {
                 config={row}
                 value={settings[row.key]}
                 onChange={(value) => updateSettings({ [row.key]: value })}
-                showDivider={index < SETTING_ROWS.length - 1}
+                showDivider
               />
             ))}
+
+            {/* somAtivo: som dos avisos de fim de foco e de pausa. */}
+            <View style={styles.settingRow}>
+              <View style={styles.settingText}>
+                <Text style={styles.settingLabel}>Som ao terminar</Text>
+                <Text style={styles.settingDescription}>
+                  Toca som nos avisos de fim de foco e de pausa
+                </Text>
+              </View>
+              <Switch
+                value={settings.soundEnabled}
+                onValueChange={(soundEnabled) => updateSettings({ soundEnabled })}
+                trackColor={{ false: "#FFFFFF26", true: Colors.primary }}
+                thumbColor={Colors.text}
+                accessibilityLabel="Som ao terminar"
+              />
+            </View>
           </View>
 
           {phase !== "idle" && (
@@ -176,7 +194,7 @@ export default function SettingsScreen() {
           <View style={styles.card}>
             <View style={[styles.settingRow, styles.settingDivider]}>
               <View style={styles.settingText}>
-                <Text style={styles.settingLabel}>Avisos de eventos</Text>
+                <Text style={styles.settingLabel}>Avisos e lembretes</Text>
                 <Text style={styles.settingDescription}>
                   {NOTIFICATION_STATUS_TEXT[notificationStatus.status]}
                 </Text>
@@ -286,8 +304,9 @@ export default function SettingsScreen() {
               O Pomodoro volta para {DEFAULT_POMODORO_SETTINGS.focusMinutes} min de foco,{" "}
               {DEFAULT_POMODORO_SETTINGS.shortBreakMinutes} min de pausa curta,{" "}
               {DEFAULT_POMODORO_SETTINGS.longBreakMinutes} min de pausa longa e{" "}
-              {DEFAULT_POMODORO_SETTINGS.cyclesBeforeLongBreak} ciclos, o aviso padrão volta
-              para {shortNotifyLabel(DEFAULT_PREFERENCES.defaultNotifyBeforeMinutes)} antes e a
+              {DEFAULT_POMODORO_SETTINGS.cyclesBeforeLongBreak} ciclos com som ao terminar, o
+              aviso padrão volta para{" "}
+              {shortNotifyLabel(DEFAULT_PREFERENCES.defaultNotifyBeforeMinutes)} antes e a
               vibração é ligada. Seu perfil não muda.
             </Text>
 
@@ -326,7 +345,7 @@ function shortNotifyLabel(minutes: number | null): string {
 }
 
 const NOTIFICATION_STATUS_TEXT: Record<NotificationPermissionStatus, string> = {
-  granted: "Ativadas: você recebe os avisos dos eventos",
+  granted: "Ativadas: avisos de eventos, tarefas e do Pomodoro",
   undetermined: "Ainda não permitidas neste aparelho",
   denied: "Bloqueadas nas configurações do aparelho",
   unsupported: "Indisponíveis no navegador",

@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-import { PomodoroSession } from "@/types/pomodoro";
+import { PomodoroSession, PomodoroSessionType } from "@/types/pomodoro";
 
 const STORAGE_KEY = "acadex:pomodoro-sessions";
 
@@ -29,6 +29,8 @@ const PomodoroHistoryContext = createContext<PomodoroHistoryContextValue | undef
   undefined
 );
 
+const SESSION_TYPES: PomodoroSessionType[] = ["focus", "shortBreak", "longBreak"];
+
 function isSession(value: unknown): value is PomodoroSession {
   const s = value as PomodoroSession;
   return (
@@ -42,14 +44,23 @@ function isSession(value: unknown): value is PomodoroSession {
   );
 }
 
+// Sessões salvas antes de `type`/`cycleNumber` existirem eram sempre focos.
+function normalize(session: PomodoroSession): PomodoroSession {
+  return {
+    ...session,
+    type: SESSION_TYPES.includes(session.type) ? session.type : "focus",
+    cycleNumber: typeof session.cycleNumber === "number" ? session.cycleNumber : null,
+  };
+}
+
 function prune(sessions: PomodoroSession[]): PomodoroSession[] {
   const cutoff = Date.now() - KEEP_DAYS * DAY_MS;
   return sessions.filter((session) => session.endedAt >= cutoff);
 }
 
 // Histórico de sessões Pomodoro (classe "Sessão Pomodoro"). O
-// PomodoroProvider registra aqui cada foco completado ou cancelado; a tela
-// de histórico (app/history.tsx) lê e resume.
+// PomodoroProvider registra aqui cada foco e cada pausa, completados ou
+// cancelados; a tela de histórico (app/history.tsx) lê e resume os focos.
 export function PomodoroHistoryProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<PomodoroSession[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -59,7 +70,14 @@ export function PomodoroHistoryProvider({ children }: { children: ReactNode }) {
       .then((raw) => {
         if (!raw) return;
         const parsed: unknown = JSON.parse(raw);
-        if (Array.isArray(parsed)) setSessions(prune(parsed.filter(isSession)));
+        if (!Array.isArray(parsed)) return;
+        const loaded = prune(parsed.filter(isSession).map(normalize));
+        // Junta com sessões registradas antes de a leitura terminar (ex: o
+        // Pomodoro restaurando um foco que acabou com o app fechado).
+        setSessions((prev) => {
+          const ids = new Set(prev.map((session) => session.id));
+          return [...prev, ...loaded.filter((session) => !ids.has(session.id))];
+        });
       })
       .catch((error) => console.warn("[histórico] falha ao ler as sessões", error))
       .finally(() => setIsLoaded(true));
@@ -71,7 +89,10 @@ export function PomodoroHistoryProvider({ children }: { children: ReactNode }) {
   }, [sessions, isLoaded]);
 
   const addSession = useCallback((input: NewSessionInput) => {
-    const session: PomodoroSession = { id: `${input.endedAt}-${input.startedAt}`, ...input };
+    const session: PomodoroSession = {
+      id: `${input.type}-${input.endedAt}-${input.startedAt}`,
+      ...input,
+    };
     setSessions((prev) => [session, ...prev]);
   }, []);
 

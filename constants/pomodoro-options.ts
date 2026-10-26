@@ -1,4 +1,4 @@
-import { PomodoroPhase, PomodoroSettings } from "@/types/pomodoro";
+import { PomodoroNumericSetting, PomodoroPhase, PomodoroSettings } from "@/types/pomodoro";
 
 // Valores padrão da técnica Pomodoro (usados até o usuário mudar e no
 // "Restaurar padrão" da tela de configurações).
@@ -7,6 +7,7 @@ export const DEFAULT_POMODORO_SETTINGS: PomodoroSettings = {
   shortBreakMinutes: 5,
   longBreakMinutes: 15,
   cyclesBeforeLongBreak: 4,
+  soundEnabled: true,
 };
 
 type SettingLimit = { min: number; max: number; step: number };
@@ -18,7 +19,7 @@ type SettingLimit = { min: number; max: number; step: number };
 export const DEV_QUICK_FOCUS_SECONDS = 2;
 
 // Limites e passo de cada ajuste na tela de configurações.
-export const POMODORO_SETTING_LIMITS: Record<keyof PomodoroSettings, SettingLimit> = {
+export const POMODORO_SETTING_LIMITS: Record<PomodoroNumericSetting, SettingLimit> = {
   focusMinutes: { min: __DEV__ ? 0 : 5, max: 90, step: 5 },
   shortBreakMinutes: { min: 1, max: 30, step: 1 },
   longBreakMinutes: { min: 5, max: 60, step: 5 },
@@ -27,7 +28,7 @@ export const POMODORO_SETTING_LIMITS: Record<keyof PomodoroSettings, SettingLimi
 
 // Garante que um valor (ex: lido do armazenamento) está dentro dos limites
 // e é um inteiro; se não for um número válido, usa o padrão.
-export function clampPomodoroSetting(key: keyof PomodoroSettings, value: unknown): number {
+export function clampPomodoroSetting(key: PomodoroNumericSetting, value: unknown): number {
   const { min, max } = POMODORO_SETTING_LIMITS[key];
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_POMODORO_SETTINGS[key];

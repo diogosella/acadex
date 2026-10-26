@@ -1,3 +1,4 @@
+import { cancelAppNotification, scheduleAppNotification } from "@/lib/notification-registry";
 import * as Notifications from "@/lib/notifications-api";
 import { Platform } from "react-native";
 
@@ -21,7 +22,9 @@ const ANDROID_CHANNEL_ID = "events";
 
 // O iOS mantém no máximo 64 notificações locais agendadas por app; a
 // reconciliação agenda só as mais próximas, com folga.
-const MAX_SCHEDULED_NOTIFICATIONS = 60;
+// Os lembretes de tarefa (lib/task-notifications.ts) usam outra parte desse
+// limite.
+const MAX_SCHEDULED_NOTIFICATIONS = 40;
 
 type EventNotificationInput = Pick<
   CalendarEvent,
@@ -47,10 +50,12 @@ export type ScheduleEventNotificationResult =
 // plano (por padrão, ela só apareceria com o app em segundo plano/fechado).
 if (IS_SUPPORTED) {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
+    // Avisos marcados como silenciosos (Pomodoro com o som desligado) não
+    // tocam som nem com o app aberto.
+    handleNotification: async (notification) => ({
       shouldShowBanner: true,
       shouldShowList: true,
-      shouldPlaySound: true,
+      shouldPlaySound: notification.request.content.data?.silent !== true,
       shouldSetBadge: false,
     }),
   });
@@ -103,15 +108,22 @@ function buildBody(event: EventNotificationInput): string {
 // permissão nem o agendamento. Sem o canal "events", o expo-notifications
 // usa automaticamente o canal padrão dele (fallback), e o aviso chega mesmo
 // assim, só sem o nome/importância personalizados.
-async function ensureAndroidChannel(): Promise<void> {
+export async function ensureAndroidChannel(
+  channelId: string = ANDROID_CHANNEL_ID,
+  name: string = "Eventos do calendário",
+  options: { silent?: boolean } = {}
+): Promise<void> {
   if (Platform.OS !== "android") return;
   try {
-    await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
-      name: "Eventos do calendário",
+    await Notifications.setNotificationChannelAsync(channelId, {
+      name,
       importance: Notifications.AndroidImportance.HIGH,
+      // No Android o som é do canal (não do aviso): canal silencioso para
+      // quando o som estiver desligado.
+      ...(options.silent ? { sound: null } : {}),
     });
   } catch (error) {
-    console.warn("[notificações] falha ao criar o canal Android de eventos", error);
+    console.warn(`[notificações] falha ao criar o canal Android "${channelId}"`, error);
   }
 }
 
@@ -176,21 +188,15 @@ export async function scheduleEventNotification(
 
   try {
     await ensureAndroidChannel();
-    const identifier = notificationIdFor(event.id);
-    // Cancela antes, para reagendar sem duplicar (ex: edição de evento).
-    await Notifications.cancelScheduledNotificationAsync(identifier);
-    await Notifications.scheduleNotificationAsync({
-      identifier,
-      content: {
-        title: event.title,
-        body: buildBody(event),
-        data: { eventId: event.id, date: event.date },
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: trigger,
-        channelId: ANDROID_CHANNEL_ID,
-      },
+    // Substitui o aviso anterior do mesmo evento (ex: edição).
+    await scheduleAppNotification({
+      id: notificationIdFor(event.id),
+      type: "EVENTO",
+      title: event.title,
+      message: buildBody(event),
+      triggerAt: trigger.getTime(),
+      channelId: ANDROID_CHANNEL_ID,
+      data: { eventId: event.id, date: event.date },
     });
     return { scheduled: true };
   } catch (error) {
@@ -202,7 +208,7 @@ export async function scheduleEventNotification(
 export async function cancelEventNotification(eventId: string): Promise<void> {
   if (!IS_SUPPORTED) return;
   try {
-    await Notifications.cancelScheduledNotificationAsync(notificationIdFor(eventId));
+    await cancelAppNotification(notificationIdFor(eventId));
   } catch (error) {
     console.warn("[notificações] falha ao cancelar aviso do evento", error);
   }
@@ -240,7 +246,7 @@ export async function syncEventNotifications(
 
     for (const identifier of scheduledIds) {
       if (!wanted.has(identifier)) {
-        await Notifications.cancelScheduledNotificationAsync(identifier);
+        await cancelAppNotification(identifier);
       }
     }
 

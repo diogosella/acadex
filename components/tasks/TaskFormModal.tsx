@@ -2,18 +2,36 @@ import SubjectFormModal from "@/components/tasks/SubjectFormModal";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import FloatingMenu from "@/components/ui/FloatingMenu";
 import { Colors, Fonts } from "@/constants/colors";
-import { PRIORITY_OPTIONS } from "@/constants/task-options";
+import {
+  addDaysToKey,
+  computeRemindAt,
+  DEFAULT_REMIND_DAYS_BEFORE,
+  DUE_DATE_RANGE_DAYS,
+  formatDueDate,
+  formatDueDateRelative,
+  getReminderOption,
+  PRIORITY_OPTIONS,
+  REMINDER_OPTIONS,
+  todayDateKey,
+} from "@/constants/task-options";
 import { useSubjects } from "@/contexts/subjects-context";
 import { NewTaskInput } from "@/contexts/tasks-context";
 import { useAnchoredMenu } from "@/hooks/use-anchored-menu";
+import {
+  getNotificationPermissionStatus,
+  NotificationPermissionStatus,
+} from "@/lib/event-notifications";
 import { hapticSelection } from "@/lib/haptics";
+import { isTaskReminderInPast } from "@/lib/task-notifications";
 import { Subject } from "@/types/subject";
 import { Task, TaskPriority } from "@/types/task";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Keyboard, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 const MENU_MAX_HEIGHT = 220;
+
+type MenuKey = "priority" | "subject" | "due" | "reminder";
 
 type TaskFormModalProps = {
   visible: boolean;
@@ -44,6 +62,10 @@ export default function TaskFormModal({
   // Assunto aberto no formulário de assunto (null = criar um novo).
   const [subjectToEdit, setSubjectToEdit] = useState<Subject | null>(null);
   const [confirmDeleteVisible, setConfirmDeleteVisible] = useState(false);
+  const [dueDate, setDueDate] = useState<string | null>(null);
+  const [remindDaysBefore, setRemindDaysBefore] = useState<number | null>(null);
+  const [permissionStatus, setPermissionStatus] =
+    useState<NotificationPermissionStatus>("undetermined");
 
   // Dropdowns de Prioridade e Assunto flutuantes, desenhados no fundo do
   // modal (ver hooks/use-anchored-menu.ts: dentro do card eles não rolavam
@@ -57,9 +79,11 @@ export default function TaskFormModal({
     close: closeMenu,
     onContainerLayout,
     onContentLayout,
-  } = useAnchoredMenu<"priority" | "subject">({ maxHeight: MENU_MAX_HEIGHT });
+  } = useAnchoredMenu<MenuKey>({ maxHeight: MENU_MAX_HEIGHT });
   const priorityMenuOpen = openMenu === "priority";
   const subjectMenuOpen = openMenu === "subject";
+  const dueMenuOpen = openMenu === "due";
+  const reminderMenuOpen = openMenu === "reminder";
 
   // Preenche o formulário toda vez que o modal é aberto (vazio ou com os
   // dados da tarefa). Feito no render ao perceber a abertura, padrão do
@@ -72,13 +96,28 @@ export default function TaskFormModal({
       setTitle(task?.title ?? "");
       setPriority(task?.priority ?? "baixa");
       setSelectedSubjectId(task?.subjectId ?? null);
+      setDueDate(task?.dueDate ?? null);
+      setRemindDaysBefore(task?.dueDate ? (task.remindDaysBefore ?? null) : null);
       setSubjectFormVisible(false);
       setConfirmDeleteVisible(false);
       closeMenu();
     }
   }
 
-  const handleToggleMenu = (key: "priority" | "subject") => {
+  // Consulta (sem pedir) a permissão de notificação ao abrir, para avisar
+  // se o lembrete não vai chegar.
+  useEffect(() => {
+    if (!visible) return;
+    let active = true;
+    getNotificationPermissionStatus().then((status) => {
+      if (active) setPermissionStatus(status);
+    });
+    return () => {
+      active = false;
+    };
+  }, [visible]);
+
+  const handleToggleMenu = (key: MenuKey) => {
     Keyboard.dismiss();
     toggleMenu(key);
   };
@@ -89,6 +128,51 @@ export default function TaskFormModal({
   const selectedSubject = subjects.find((subject) => subject.id === selectedSubjectId);
 
   const canSubmit = title.trim().length > 0;
+
+  // Opções de entrega: sem data + os próximos dias. Se a tarefa já tinha uma
+  // data fora dessa faixa (ex: entrega que já passou), ela aparece também.
+  const today = todayDateKey();
+  const dueOptions: (string | null)[] = [
+    null,
+    ...Array.from({ length: DUE_DATE_RANGE_DAYS }, (_, index) => addDaysToKey(today, index)),
+  ];
+  if (dueDate && !dueOptions.includes(dueDate)) dueOptions.splice(1, 0, dueDate);
+
+  const selectDueDate = (value: string | null) => {
+    // Ao escolher a primeira data, o lembrete padrão já vem marcado (ou
+    // "no dia", se o padrão já passou; ou nenhum, se os dois já passaram).
+    if (value && !dueDate && remindDaysBefore === null) {
+      const fallback = [DEFAULT_REMIND_DAYS_BEFORE, 0].find(
+        (days) => !isTaskReminderInPast(computeRemindAt(value, days))
+      );
+      setRemindDaysBefore(fallback ?? null);
+    }
+    if (!value) setRemindDaysBefore(null);
+    setDueDate(value);
+  };
+
+  const currentReminder = getReminderOption(remindDaysBefore);
+
+  // Aviso curto abaixo de Entrega/Lembrete, só quando o lembrete não vai
+  // chegar.
+  let reminderHint: string | null = null;
+  if (dueDate && remindDaysBefore !== null) {
+    // Na edição sem mudar data/lembrete, vale o horário já salvo.
+    const unchanged =
+      editing &&
+      (editing.dueDate ?? null) === dueDate &&
+      (editing.remindDaysBefore ?? null) === remindDaysBefore;
+    const remindAt = unchanged
+      ? (editing.remindAt ?? null)
+      : computeRemindAt(dueDate, remindDaysBefore);
+    if (permissionStatus === "unsupported") {
+      reminderHint = "Lembretes só funcionam no celular.";
+    } else if (permissionStatus === "denied") {
+      reminderHint = "Notificações desativadas nas configurações do aparelho.";
+    } else if (isTaskReminderInPast(remindAt)) {
+      reminderHint = "Esse horário de lembrete já passou. Escolha outro.";
+    }
+  }
 
   const handleBackdropPress = () => {
     if (openMenu) {
@@ -111,6 +195,8 @@ export default function TaskFormModal({
       title: title.trim(),
       priority,
       subjectId: selectedSubjectId,
+      dueDate,
+      remindDaysBefore: dueDate ? remindDaysBefore : null,
     });
     onClose();
   };
@@ -215,6 +301,64 @@ export default function TaskFormModal({
               </View>
             </View>
 
+            {/* Data de entrega e lembrete (opcionais). */}
+            <View style={styles.row}>
+              <View style={styles.dueColumn}>
+                <Text style={styles.label}>Entrega</Text>
+                <Pressable
+                  ref={anchorRef("due")}
+                  style={styles.selectField}
+                  onPress={() => handleToggleMenu("due")}
+                  accessibilityRole="button"
+                  accessibilityLabel="Data de entrega"
+                >
+                  <Ionicons
+                    name="calendar-outline"
+                    size={14}
+                    color={dueDate ? Colors.text : "#FFFFFF80"}
+                  />
+                  <Text
+                    style={dueDate ? styles.selectText : styles.placeholderText}
+                    numberOfLines={1}
+                  >
+                    {dueDate ? formatDueDateRelative(dueDate) : "Sem data"}
+                  </Text>
+                  <Ionicons name="chevron-down" size={14} color={Colors.text} />
+                </Pressable>
+              </View>
+
+              <View style={styles.reminderColumn}>
+                <Text style={[styles.label, !dueDate && styles.labelDisabled]}>Lembrete</Text>
+                <Pressable
+                  ref={anchorRef("reminder")}
+                  style={[styles.selectField, !dueDate && styles.fieldDisabled]}
+                  onPress={() => handleToggleMenu("reminder")}
+                  disabled={!dueDate}
+                  accessibilityRole="button"
+                  accessibilityLabel="Lembrete"
+                  accessibilityState={{ disabled: !dueDate }}
+                >
+                  <Ionicons
+                    name={dueDate && remindDaysBefore !== null ? "notifications" : "notifications-off-outline"}
+                    size={14}
+                    color={dueDate && remindDaysBefore !== null ? Colors.text : "#FFFFFF80"}
+                  />
+                  <Text
+                    style={
+                      dueDate && remindDaysBefore !== null
+                        ? styles.selectText
+                        : styles.placeholderText
+                    }
+                    numberOfLines={1}
+                  >
+                    {dueDate ? currentReminder.short : "Defina a entrega"}
+                  </Text>
+                  <Ionicons name="chevron-down" size={14} color={Colors.text} />
+                </Pressable>
+              </View>
+            </View>
+            {reminderHint && <Text style={styles.reminderHint}>{reminderHint}</Text>}
+
             <View style={styles.actions}>
               {isEditing && onDelete && (
                 <Pressable
@@ -266,6 +410,59 @@ export default function TaskFormModal({
                 <Text style={styles.optionText}>{option.label}</Text>
               </Pressable>
             ))}
+          </FloatingMenu>
+
+          <FloatingMenu position={dueMenuOpen ? menuPosition : null} maxHeight={MENU_MAX_HEIGHT}>
+            {dueOptions.map((option) => (
+              <Pressable
+                key={option ?? "none"}
+                style={[styles.optionRow, option === dueDate && styles.optionRowSelected]}
+                onPress={() => {
+                  selectDueDate(option);
+                  closeMenu();
+                }}
+              >
+                <Text style={styles.optionText}>
+                  {option === null
+                    ? "Sem data"
+                    : option === today || option === addDaysToKey(today, 1)
+                      ? `${formatDueDateRelative(option)} · ${formatDueDate(option)}`
+                      : formatDueDate(option)}
+                </Text>
+              </Pressable>
+            ))}
+          </FloatingMenu>
+
+          <FloatingMenu
+            position={reminderMenuOpen ? menuPosition : null}
+            maxHeight={MENU_MAX_HEIGHT}
+          >
+            {REMINDER_OPTIONS.map((option) => {
+              // Opções cujo horário já passou (ex: "2 dias antes" de uma
+              // entrega amanhã) aparecem apagadas e não podem ser escolhidas.
+              const past =
+                option.daysBefore !== null &&
+                isTaskReminderInPast(computeRemindAt(dueDate, option.daysBefore));
+              return (
+                <Pressable
+                  key={option.label}
+                  disabled={past}
+                  style={[
+                    styles.optionRow,
+                    option.daysBefore === remindDaysBefore && styles.optionRowSelected,
+                  ]}
+                  onPress={() => {
+                    setRemindDaysBefore(option.daysBefore);
+                    closeMenu();
+                  }}
+                >
+                  <Text style={[styles.optionText, past && styles.optionTextPast]}>
+                    {option.label}
+                    {past ? " · já passou" : ""}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </FloatingMenu>
 
           <FloatingMenu
@@ -376,6 +573,28 @@ const styles = StyleSheet.create({
   },
   priorityColumn: {
     marginRight: 20,
+  },
+  dueColumn: {
+    marginRight: 20,
+  },
+  reminderColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  labelDisabled: {
+    opacity: 0.4,
+  },
+  fieldDisabled: {
+    opacity: 0.5,
+  },
+  optionTextPast: {
+    opacity: 0.45,
+  },
+  reminderHint: {
+    color: "#FFD60A",
+    fontFamily: Fonts.book,
+    fontSize: 12,
+    marginTop: 8,
   },
   subjectColumn: {
     flex: 1,

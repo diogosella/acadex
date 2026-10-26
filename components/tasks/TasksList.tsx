@@ -1,10 +1,17 @@
 import { Colors, Fonts } from "@/constants/colors";
-import { getPriorityOption } from "@/constants/task-options";
+import {
+  daysUntil,
+  formatDueDate,
+  formatDueDateRelative,
+  getPriorityOption,
+} from "@/constants/task-options";
 import { useSubjects } from "@/contexts/subjects-context";
 import { Task } from "@/types/task";
 import { hapticSelection } from "@/lib/haptics";
+import { hasPendingReminder, isTaskOverdue } from "@/lib/task-notifications";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import Checkbox from "expo-checkbox";
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 type TaskCardProps = {
   task: Task;
@@ -21,13 +28,28 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit }: TaskCardP
   const { getSubject } = useSubjects();
   const subject = task.subjectId ? getSubject(task.subjectId) : undefined;
 
+  // Entrega: atrasada em vermelho, hoje em amarelo, o resto discreto.
+  const due = task.dueDate ?? null;
+  const overdue = isTaskOverdue(task);
+  const dueToday = !task.done && due !== null && daysUntil(due) === 0;
+  const dueColor = overdue ? "#FF3B30" : dueToday ? "#FFD60A" : "#FFFFFFB3";
+  const dueLabel = due
+    ? overdue
+      ? `Atrasada · ${formatDueDate(due)}`
+      : formatDueDateRelative(due)
+    : null;
+  const hasActiveReminder = hasPendingReminder(task);
+
   return (
     <Pressable
       onPress={() => {
         hapticSelection();
         onEdit();
       }}
-      accessibilityRole="button"
+      // Na web, role "button" vira <button>, e a caixinha e a lixeira
+      // ficariam aninhadas dentro dele (inválido no HTML). Lá o card fica
+      // sem o papel de botão; no celular, nada muda.
+      accessibilityRole={Platform.OS === "web" ? undefined : "button"}
       accessibilityLabel={`Editar tarefa ${task.title}`}
       style={({ pressed }) => [styles.taskComponent, pressed && styles.taskPressed]}
     >
@@ -49,31 +71,55 @@ export default function TaskCard({ task, onToggle, onDelete, onEdit }: TaskCardP
           <Text style={styles.taskTitle} numberOfLines={2}>
             {task.title}
           </Text>
+
+          {/* Lixeira (só nas concluídas): botão redondo de 36 px na própria
+              linha do título, com folga de toque e retorno visual. Antes era
+              um ícone de 24 px solto no canto, difícil de acertar. */}
+          {task.done && (
+            <Pressable
+              onPress={() => {
+                hapticSelection();
+                onDelete();
+              }}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={`Excluir tarefa ${task.title}`}
+              style={({ pressed }) => [styles.deleteButton, pressed && styles.deleteButtonPressed]}
+            >
+              <Ionicons name="trash-outline" size={17} color={Colors.text} />
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.taskSettings}>
           <Text style={[styles.taskType, { color: subject?.color }]}>
             {subject ? `• ${subject.name}` : ""}
           </Text>
-          <Text
-            style={[
-              styles.taskUrgency,
-              { color: priorityOption.color, borderColor: priorityOption.color },
-            ]}
-          >
-            {priorityOption.label}
-          </Text>
+          <View style={styles.badges}>
+            {dueLabel && (
+              <View
+                style={styles.dueChip}
+                accessibilityLabel={`Entrega: ${dueLabel}${hasActiveReminder ? ", com lembrete" : ""}`}
+              >
+                <Ionicons name="calendar-outline" size={9} color={dueColor} />
+                <Text style={[styles.dueText, { color: dueColor }]}>{dueLabel}</Text>
+                {hasActiveReminder && (
+                  <Ionicons name="notifications" size={9} color={dueColor} />
+                )}
+              </View>
+            )}
+            <Text
+              style={[
+                styles.taskUrgency,
+                { color: priorityOption.color, borderColor: priorityOption.color },
+              ]}
+            >
+              {priorityOption.label}
+            </Text>
+          </View>
         </View>
       </View>
 
-      {task.done && (
-        <Pressable style={styles.deleteButton} onPress={onDelete}>
-          <Image
-            source={require("../../assets/images/icons/trash-icon.png")}
-            style={styles.deleteIcon}
-          />
-        </Pressable>
-      )}
     </Pressable>
   );
 }
@@ -94,15 +140,18 @@ const styles = StyleSheet.create({
         flexDirection: "column"
     },
     taskTitle: {
-        width: 260,
+        flex: 1,
         color: Colors.text,
         fontSize: 12,
         fontFamily: Fonts.bold,
         marginLeft: 10
     },
+    // Altura mínima da lixeira: a linha não muda de tamanho ao concluir.
     taskMain: {
         flexDirection: "row",
         alignItems: "center",
+        minHeight: 36,
+        paddingRight: 12,
     },
     taskPressed: {
         opacity: 0.85,
@@ -112,12 +161,29 @@ const styles = StyleSheet.create({
     },
     taskSettings: {
         flexDirection: "row",
+        alignItems: "center",
         justifyContent: "space-between",
         marginHorizontal: 16,
         marginTop: 16
     },
     taskType: {
-        fontSize: 8
+        fontSize: 8,
+        flexShrink: 1,
+        marginRight: 8,
+    },
+    badges: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+    },
+    dueChip: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 3,
+    },
+    dueText: {
+        fontFamily: Fonts.book,
+        fontSize: 9,
     },
     taskUrgency: {
         borderWidth: 0.5,
@@ -127,17 +193,19 @@ const styles = StyleSheet.create({
         fontSize: 8
     },
     deleteButton: {
-        position: "absolute",
-        top: 8,
-        right: 8,
-        width: 24,
-        height: 24,
-        justifyContent: "center",
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        marginLeft: 8,
         alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: `${Colors.primary}26`,
+        borderWidth: 1,
+        borderColor: `${Colors.primary}66`,
     },
-    deleteIcon: {
-        width: 16,
-        height: 16,
-        resizeMode: "contain",
+    deleteButtonPressed: {
+        backgroundColor: Colors.primary,
+        borderColor: Colors.primary,
+        transform: [{ scale: 0.92 }],
     },
 })

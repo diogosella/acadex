@@ -12,6 +12,9 @@ type DayRowProps = {
   dateKey: string; // "YYYY-MM-DD"
   events: CalendarEvent[];
   isToday: boolean;
+  // Dia que já passou (no mês atual): aparece esmaecido e sem o "+"; os
+  // eventos continuam tocáveis (para consultar, editar ou excluir).
+  isPast: boolean;
   onAddEvent: (dateKey: string) => void;
   onEditEvent: (event: CalendarEvent) => void;
 };
@@ -24,12 +27,16 @@ type DayRowProps = {
 // dessa ação e reage ao toque junto com a linha. Os chips de evento são
 // Pressables próprios e, por estarem dentro, têm prioridade: tocar num
 // evento abre a edição dele, não o formulário de criação.
+//
+// Dias passados não criam eventos: a linha não responde ao toque e o "+"
+// some (fica só o espaço, para as colunas continuarem alinhadas).
 function DayRow({
   day,
   weekday,
   dateKey,
   events,
   isToday,
+  isPast,
   onAddEvent,
   onEditEvent,
 }: DayRowProps) {
@@ -41,34 +48,46 @@ function DayRow({
   return (
     <Pressable
       onPress={handlePress}
+      disabled={isPast}
       // Pequeno atraso no destaque: quem só está rolando a lista não vê a
       // linha "piscar". Um toque rápido continua abrindo o formulário.
       unstable_pressDelay={70}
-      android_ripple={{ color: "#FFFFFF14" }}
-      accessibilityRole="button"
-      accessibilityLabel={`Adicionar evento no dia ${day}`}
+      android_ripple={isPast ? undefined : { color: "#FFFFFF14" }}
+      // Na web, role "button" vira um <button> de verdade, e os chips de
+      // evento (também botões) ficariam aninhados dentro dele, o que o HTML
+      // não permite. Lá a linha fica sem o papel de botão (continua
+      // clicável e focável); no celular, nada muda.
+      accessibilityRole={isPast || Platform.OS === "web" ? undefined : "button"}
+      accessibilityLabel={
+        isPast ? `Dia ${day}, já passou` : `Adicionar evento no dia ${day}`
+      }
       style={({ pressed }) => [
         styles.row,
+        isToday && styles.todayRow,
         // No Android o ripple já dá o retorno visual; no iOS/web, escurece.
         pressed && Platform.OS !== "android" && styles.rowPressed,
       ]}
     >
       {({ pressed }) => (
         <>
-          <View style={styles.dateColumn}>
+          <View style={[styles.dateColumn, isPast && styles.past]}>
             <Text style={[styles.dayNumber, isToday && styles.todayText]}>{day}</Text>
             <Text style={[styles.weekday, isToday && styles.todayText]}>{weekday}</Text>
           </View>
 
-          <View style={styles.eventsColumn}>
+          <View style={[styles.eventsColumn, isPast && styles.past]}>
             {events.map((event) => (
               <EventItem key={event.id} event={event} onPress={onEditEvent} />
             ))}
           </View>
 
-          <View style={[styles.addButton, pressed && styles.addButtonPressed]}>
-            <Ionicons name="add" size={22} color={Colors.text} />
-          </View>
+          {isPast ? (
+            <View style={styles.addPlaceholder} />
+          ) : (
+            <View style={[styles.addButton, pressed && styles.addButtonPressed]}>
+              <Ionicons name="add" size={22} color={Colors.text} />
+            </View>
+          )}
         </>
       )}
     </Pressable>
@@ -90,6 +109,17 @@ const styles = StyleSheet.create({
   },
   rowPressed: {
     backgroundColor: "#FFFFFF0D",
+  },
+  // Hoje: fundo levemente avermelhado, para achar o dia ao abrir a aba.
+  todayRow: {
+    backgroundColor: `${Colors.primary}14`,
+  },
+  past: {
+    opacity: 0.4,
+  },
+  addPlaceholder: {
+    width: 40,
+    height: 40,
   },
   dateColumn: {
     width: 44,
